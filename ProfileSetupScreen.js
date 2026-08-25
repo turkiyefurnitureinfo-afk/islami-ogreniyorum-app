@@ -10,7 +10,7 @@ const ProfileSetupScreen = ({ styles, palette, t, account, setAccount, occupatio
   // Pick a profile picture from the device gallery
   const pickProfilePicture = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.7,

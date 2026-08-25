@@ -17,6 +17,10 @@
       "resizeMode": "contain",
       "backgroundColor": "#060b12"
     },
+    "androidStatusBar": {
+      "backgroundColor": "#060b12",
+      "barStyle": "light-content"
+    },
     "android": {
       "package": "com.joshua.islamiogreniyorum",
       "adaptiveIcon": {

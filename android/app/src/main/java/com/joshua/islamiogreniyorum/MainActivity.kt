@@ -1,4 +1,4 @@
-package com.joshua.islamiogreniyorum
+package com.islamreniyorum
 
 import android.os.Build
 import android.os.Bundle

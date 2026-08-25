@@ -1,7 +1,24 @@
 import React, { useState } from 'react';
 import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Video } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
+
+/** Single post video player (hook requires its own component instance). */
+function PostVideo({ uri, style }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = false;
+    p.muted = false;
+  });
+  return (
+    <VideoView
+      player={player}
+      style={style}
+      contentFit="cover"
+      allowsFullscreen
+      allowsPictureInPicture
+    />
+  );
+}
 
 const CommunityTab = ({
   styles,
@@ -88,7 +105,7 @@ const CommunityTab = ({
     setPickingMedia(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
       });
@@ -106,7 +123,7 @@ const CommunityTab = ({
     setPickingMedia(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        mediaTypes: ['videos'],
         allowsEditing: true,
         quality: 0.8,
       });
@@ -232,12 +249,7 @@ const CommunityTab = ({
               ) : (
                 <View>
                   <Text style={styles.communityMediaBadge}>🎥 {t?.video || 'Video'}</Text>
-                  <Video
-                    source={{ uri: post.media.uri }}
-                    style={styles.communityPostVideo}
-                    useNativeControls
-                    resizeMode="cover"
-                  />
+                  <PostVideo uri={post.media.uri} style={styles.communityPostVideo} />
                 </View>
               )}
             </View>
