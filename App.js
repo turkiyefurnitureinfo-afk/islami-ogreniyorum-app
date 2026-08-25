@@ -20,7 +20,7 @@ import {
 import { translations } from './translations.js';
 import { computeTimes, formatClock } from './utils.js';
 import { getDeviceLocale, localeToLanguage } from './locale.js';
-import { detectLocation, silentLocationRefresh } from './locationService.js';
+import { detectLocation, autoDetectLocation } from './locationService.js';
 import { makeStyles } from './styles.js';
 import {
   requestNotificationPermissions,
@@ -74,6 +74,8 @@ export default function App() {
   const [customLocation, setCustomLocation] = useState(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState('');
+  // True when GPS permission was refused (so we can offer manual detection).
+  const [locationDenied, setLocationDenied] = useState(false);
   // True once persisted data has been loaded from AsyncStorage. Persistence
   // effects below wait for this so they never overwrite stored values with
   // initial defaults during startup.
@@ -157,14 +159,31 @@ export default function App() {
     })();
   }, []);
 
-  // Silently refresh the GPS position when permission was granted before
-  // (never shows a system prompt; a no-op otherwise).
+  // Auto-detect the user's REAL location anywhere in the world so prayer times
+  // and event times match where they are (not just the preset cities). Runs
+  // once the user is signed in; gracefully falls back to a default city when
+  // permission is denied or GPS is unavailable.
+  const autoDetectRanRef = React.useRef(false);
   useEffect(() => {
+    if (!signedIn || autoDetectRanRef.current) return;
+    autoDetectRanRef.current = true;
     (async () => {
-      const loc = await silentLocationRefresh();
-      if (loc) setCustomLocation(loc);
+      const { location, denied } = await autoDetectLocation();
+      if (denied) {
+        setLocationDenied(true);
+        setLocationError(
+          language === 'tr' ? 'Konum izni verilmedi.' : 'Location permission was denied.'
+        );
+      } else if (location) {
+        setCustomLocation(location);
+        setLocationDenied(false);
+        setLocationError('');
+      } else {
+        // Couldn't get a fix without an explicit refusal — keep default city.
+        setLocationDenied(false);
+      }
     })();
-  }, []);
+  }, [signedIn, language, t]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -546,10 +565,12 @@ export default function App() {
     try {
       const loc = await detectLocation();
       setCustomLocation(loc);
+      setLocationDenied(false);
     } catch (e) {
       setLocationError(
         e && e.code === 'PERMISSION_DENIED' ? t.locationDenied : t.locationFailed
       );
+      setLocationDenied(true);
     } finally {
       setLocating(false);
     }
