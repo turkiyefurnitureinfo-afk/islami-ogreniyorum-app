@@ -27,6 +27,7 @@ import {
   cancelAllPrayerNotifications,
   schedulePrayerNotifications,
   setupNotificationChannel,
+  registerPrayerAlarmCancellationHandler,
   sendImmediateNotification,
   scheduleEventNotification,
   registerDeviceWithBackend,
@@ -228,9 +229,18 @@ export default function App() {
   const newsItems = (liveNews && liveNews.length > 0 ? liveNews : NEWS_ITEMS[language]);
   const scholarVideos = liveScholarVideos && liveScholarVideos.length > 0 ? liveScholarVideos : SCHOLAR_VIDEOS_FALLBACK;
 
-  // Set up the Android notification channel once at startup
+  // Set up the Android notification channels once at startup
   useEffect(() => {
     setupNotificationChannel();
+  }, []);
+
+  // Prayer alarm: dismissing the alarm (tap or the ⏹ Kapat / Stop button)
+  // cancels all remaining rings FOR THAT PRAYER -- silent until the next
+  // prayer time. Other prayers are never affected. (Hard cap: rings also
+  // stop by themselves after 30 minutes.)
+  useEffect(() => {
+    const subscription = registerPrayerAlarmCancellationHandler();
+    return () => subscription.remove();
   }, []);
 
   // Unregister the device from the backend when the user signs out

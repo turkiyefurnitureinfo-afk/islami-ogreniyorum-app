@@ -189,8 +189,8 @@ export const COMMUNITY_FEATURES = {
 };
 
 export const SOUND_OPTIONS = {
-  tr: ['Sistem Varsayılanı', 'Çan', 'Zil', 'Cami Çağrısı', 'Yumuşak Yankı', 'Sessiz'],
-  en: ['System Default', 'Bell', 'Chime', 'Mosque Call', 'Soft Echo', 'Silent'],
+  tr: ['Yüksek Alarm (30 dk)', 'Sistem Varsayılanı', 'Sessiz'],
+  en: ['High Alarm (up to 30 min)', 'System Default', 'Silent'],
 };
 
 export const COMMUNITY_POSTS = {
