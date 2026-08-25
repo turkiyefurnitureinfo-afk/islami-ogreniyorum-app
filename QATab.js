@@ -1,0 +1,325 @@
+import React from 'react';
+import { ScrollView, View, Text, TextInput, Pressable, Linking, ActivityIndicator } from 'react-native';
+
+const QATab = ({
+  styles,
+  palette,
+  t,
+  qAndA,
+  expandedQas,
+  setExpandedQas,
+  newQuestion,
+  setNewQuestion,
+  handleAskQuestion,
+  handleLikeQuestion,
+  handleLikeAnswer,
+  newAnswer,
+  setNewAnswer,
+  handleSubmitAnswer,
+  answerFormOpen,
+  setAnswerFormOpen,
+  handleAIAnswer,
+}) => {
+  const handleReportQuestion = (questionId) => {
+    // TODO: Send report to backend moderation system
+    console.log(`Reported question: ${questionId}`);
+  };
+  // Prevent crash if qAndA is not an array.
+  if (!Array.isArray(qAndA)) {
+    return (
+      <ScrollView contentContainerStyle={styles.contentPadding}>
+        <Text style={styles.qaEmptyState}>{t?.noQuestionsYet || 'No questions yet. Ask the first question!'}</Text>
+      </ScrollView>
+    );
+  }
+
+  // Find top 2 most-liked questions for the "Most Asked" section.
+  const mostAsked = [...qAndA].sort((a, b) => b.likes - a.likes).slice(0, 2);
+  const mostAskedIds = mostAsked.map(q => q.id);
+  // Filter out most-asked questions and sort the rest by date (newest first).
+  const restQuestions = qAndA.filter(q => !mostAskedIds.includes(q.id)).sort((a, b) => b.id - a.id);
+
+  return (
+    <ScrollView contentContainerStyle={styles.contentPadding}>
+      {/* Ask a new question */}
+      <View style={styles.qaAskCard}>
+        <Text style={styles.qaAskTitle}>{t?.askQuestion || 'Ask a Question'}</Text>
+        <TextInput
+          style={styles.input}
+          placeholder={t?.yourQuestionPlaceholder || 'Type your question here...'}
+          placeholderTextColor={palette.muted}
+          value={newQuestion}
+          onChangeText={setNewQuestion}
+          multiline
+        />
+        <Pressable style={styles.button} onPress={handleAskQuestion}>
+          <Text style={styles.buttonText}>{t?.postQuestion || 'Post Question'}</Text>
+        </Pressable>
+      </View>
+
+      {/* Most Asked Questions */}
+      {mostAsked.length > 0 && (
+        <View style={styles.qaMostAskedSection}>
+          <Text style={styles.qaMostAskedTitle}>🔥 {t?.mostAsked || 'Most Asked'}</Text>
+          {mostAsked.map((item) => (
+            <Pressable
+              key={item.id}
+              style={styles.qaMostAskedCard}
+              onPress={() => setExpandedQas((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+            >
+              <Text style={styles.qaMostAskedBadge}>⭐ {t?.mostAsked || 'Most Asked'}</Text>
+              <View style={styles.qRow}>
+                <View style={styles.sparkDot}><Text style={styles.sparkText}>✦</Text></View>
+                <Text style={styles.qText}>{item.question}</Text>
+                <Text style={styles.expandText}>{expandedQas[item.id] ? '−' : '+'}</Text>
+              </View>
+
+              <View style={styles.qaLikesRow}>
+                <Pressable onPress={() => handleLikeQuestion(item.id)}>
+                  <Text style={[styles.qaLikeButton, item.likedByMe && styles.qaLikeButtonLiked]}>
+                    {item.likedByMe ? '❤️' : '🤍'} {item.likes} {t?.likes || 'likes'}
+                  </Text>
+                </Pressable>
+                <Text style={styles.qaAnswerCount}>
+                  {item.answers?.length || 0} {t?.answerCount || 'answers'}
+                </Text>
+              </View>
+
+              {expandedQas[item.id] && (
+                <View style={styles.answerWrap}>
+                  <Text style={styles.answerText}>{item.answer}</Text>
+                  <Pressable style={styles.referenceButton} onPress={() => Linking.openURL(item.href)}>
+                    <Text style={styles.referenceButtonText}>{t.reference}{item.source}</Text>
+                  </Pressable>
+
+                  {/* AI Answer button */}
+                  <Pressable
+                    style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
+                    onPress={() => handleAIAnswer(item.id)}
+                    disabled={item.aiAnswerLoading}
+                  >
+                    {item.aiAnswerLoading ? (
+                      <View style={styles.aiAnswerLoadingRow}>
+                        <ActivityIndicator size="small" color={palette.muted} />
+                        <Text style={styles.aiAnswerButtonText}>
+                          {t?.aiThinking || 'AI is thinking...'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.aiAnswerButtonText}>
+                        {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
+                      </Text>
+                    )}
+                  </Pressable>
+
+                  {item.aiError && (
+                    <Text style={styles.aiErrorText}>{item.aiError}</Text>
+                  )}
+
+                  {/* Fallback to web search if AI fails */}
+                  {item.aiFallbackUrl && (
+                    <Pressable style={styles.fallbackButton} onPress={() => Linking.openURL(item.aiFallbackUrl)}>
+                      <Text style={styles.fallbackButtonText}>
+                        {t?.searchWeb || 'Search on Web'}
+                      </Text>
+                    </Pressable>
+                  )}
+
+                  {/* AI answer badge (if AI already answered) */}
+                  {item.aiAnswer && (
+                    <View style={styles.aiBadgeWrap}>
+                      <Text style={styles.aiBadge}>
+                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Answers section */}
+                  <View style={styles.qaAnswersSection}>
+                    {item.answers && item.answers.length > 0 ? (
+                      item.answers.map((ans) => (
+                        <View key={ans.id} style={[styles.qaAnswerItem, ans.isAI && styles.aiContribution]}>
+                          <View style={styles.qaAnswerHeader}>
+                            <Text style={styles.qaAnswerAvatar}>{ans.user.avatar}</Text>
+                            <View>
+                              <Text style={styles.qaAnswerUser}>{ans.user.name}</Text>
+                              <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                          <View style={styles.qaAnswerFooter}>
+                            <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
+                            <Pressable onPress={() => handleLikeAnswer(item.id, ans.id)}>
+                              <Text style={[styles.qaAnswerLike, ans.likedByMe && styles.qaAnswerLikeLiked]}>
+                                {ans.likedByMe ? '❤️' : '🤍'} {ans.likes}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.qaNoAnswers}>{t?.noAnswersYet || 'No answers yet. Be the first to answer!'}</Text>
+                    )}
+
+                    {/* Add answer form */}
+                    {answerFormOpen[item.id] ? (
+                      <View style={styles.qaAnswerForm}>
+                        <TextInput
+                          style={styles.qaAnswerInput}
+                          placeholder={t?.yourAnswerPlaceholder || 'Write your answer...'}
+                          placeholderTextColor={palette.muted}
+                          value={newAnswer[item.id] || ''}
+                          onChangeText={(text) => setNewAnswer((prev) => ({ ...prev, [item.id]: text }))}
+                          multiline
+                        />
+                        <Pressable style={styles.qaAnswerSubmit} onPress={() => handleSubmitAnswer(item.id)}>
+                          <Text style={styles.qaAnswerSubmitText}>{t?.submitAnswer || 'Submit Answer'}</Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <Pressable style={styles.qaAddAnswerButton} onPress={() => setAnswerFormOpen((prev) => ({ ...prev, [item.id]: true }))}>
+                        <Text style={styles.qaAddAnswerButtonText}>✍️ {t?.addAnswer || 'Write an Answer'}</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              )}
+            </Pressable>
+          ))}
+        </View>
+      )}
+
+      {/* All Questions */}
+      <Text style={styles.qaAllQuestionsTitle}>{t?.allQuestions || 'All Questions'}</Text>
+      {restQuestions.map((item) => {
+        const expanded = !!expandedQas[item.id];
+        return (
+          <Pressable key={item.id} style={styles.essayCard} onPress={() => setExpandedQas((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}>
+            <View style={styles.qRow}>
+              <View style={styles.sparkDot}><Text style={styles.sparkText}>✦</Text></View>
+              <Text style={styles.qText}>{item.question}</Text>
+              <Text style={styles.expandText}>{expanded ? '−' : '+'}</Text>
+            </View>
+
+            <View style={styles.qaLikesRow}>
+              <Pressable onPress={() => handleLikeQuestion(item.id)}>
+                <Text style={[styles.qaLikeButton, item.likedByMe && styles.qaLikeButtonLiked]}>
+                  {item.likedByMe ? '❤️' : '🤍'} {item.likes} {t?.likes || 'likes'}
+                </Text>
+              </Pressable>
+              <Text style={styles.qaAnswerCount}>
+                {item.answers?.length || 0} {t?.answerCount || 'answers'}
+              </Text>
+            </View>
+
+            {expanded && (
+              <View style={styles.answerWrap}>
+                <Text style={styles.answerText}>{item.answer}</Text>
+                <Pressable style={styles.referenceButton} onPress={() => Linking.openURL(item.href)}>
+                  <Text style={styles.referenceButtonText}>{t.reference}{item.source}</Text>
+                </Pressable>
+
+                {/* AI Answer button */}
+                <Pressable
+                  style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
+                  onPress={() => handleAIAnswer(item.id)}
+                  disabled={item.aiAnswerLoading}
+                >
+                  {item.aiAnswerLoading ? (
+                    <View style={styles.aiAnswerLoadingRow}>
+                      <ActivityIndicator size="small" color={palette.muted} />
+                      <Text style={styles.aiAnswerButtonText}>
+                        {t?.aiThinking || 'AI is thinking...'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.aiAnswerButtonText}>
+                      {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
+                    </Text>
+                  )}
+                </Pressable>
+
+                {item.aiError && (
+                  <Text style={styles.aiErrorText}>{item.aiError}</Text>
+                )}
+
+                {/* Fallback to web search if AI fails */}
+                {item.aiFallbackUrl && (
+                  <Pressable style={styles.fallbackButton} onPress={() => Linking.openURL(item.aiFallbackUrl)}>
+                    <Text style={styles.fallbackButtonText}>
+                      {t?.searchWeb || 'Search on Web'}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {/* AI answer badge (if AI already answered) */}
+                {item.aiAnswer && (
+                  <View style={styles.aiBadgeWrap}>
+                    <Text style={styles.aiBadge}>
+                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Answers section */}
+                <View style={styles.qaAnswersSection}>
+                  {item.answers && item.answers.length > 0 ? (
+                    item.answers.map((ans) => (
+                      <View key={ans.id} style={[styles.qaAnswerItem, ans.isAI && styles.aiContribution]}>
+                        <View style={styles.qaAnswerHeader}>
+                          <Text style={styles.qaAnswerAvatar}>{ans.user.avatar}</Text>
+                          <View>
+                            <Text style={styles.qaAnswerUser}>{ans.user.name}</Text>
+                            <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                        <View style={styles.qaAnswerFooter}>
+                          <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
+                          <Pressable onPress={() => handleLikeAnswer(item.id, ans.id)}>
+                            <Text style={[styles.qaAnswerLike, ans.likedByMe && styles.qaAnswerLikeLiked]}>
+                              {ans.likedByMe ? '❤️' : '🤍'} {ans.likes}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.qaNoAnswers}>{t?.noAnswersYet || 'No answers yet. Be the first to answer!'}</Text>
+                  )}
+
+                  {/* Add answer form */}
+                  {answerFormOpen[item.id] ? (
+                    <View style={styles.qaAnswerForm}>
+                      <TextInput
+                        style={styles.qaAnswerInput}
+                        placeholder={t?.yourAnswerPlaceholder || 'Write your answer...'}
+                        placeholderTextColor={palette.muted}
+                        value={newAnswer[item.id] || ''}
+                        onChangeText={(text) => setNewAnswer((prev) => ({ ...prev, [item.id]: text }))}
+                        multiline
+                      />
+                      <Pressable style={styles.qaAnswerSubmit} onPress={() => handleSubmitAnswer(item.id)}>
+                        <Text style={styles.qaAnswerSubmitText}>{t?.submitAnswer || 'Submit Answer'}</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable style={styles.qaAddAnswerButton} onPress={() => setAnswerFormOpen((prev) => ({ ...prev, [item.id]: true }))}>
+                      <Text style={styles.qaAddAnswerButtonText}>✍️ {t?.addAnswer || 'Write an Answer'}</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            )}
+          </Pressable>
+        );
+      })}
+
+      {qAndA?.length === 0 && (
+        <Text style={styles.qaEmptyState}>{t?.noQuestionsYet || 'No questions yet. Ask the first question!'}</Text>
+      )}
+    </ScrollView>
+  );
+};
+
+export default QATab;

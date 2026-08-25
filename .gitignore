@@ -1,0 +1,21 @@
+node_modules
+.expo
+.expo-shared
+npm-debug.log*
+.DS_Store
+
+# Firebase secrets (NEVER commit these)
+server/serviceAccountKey.json
+*firebase-adminsdk*.json
+
+# Environment / secret files (NEVER commit these)
+.env
+server/.env
+server/.env.*
+!server/.env.example
+service-account-key.json
+
+# Build output & logs
+dist/
+*.log
+server/build-log.txt

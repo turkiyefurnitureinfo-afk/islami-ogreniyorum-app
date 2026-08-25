@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>İslamı öğreniyorum — Learn Islam App</title>
+  <meta name="description" content="İslamı öğreniyorum — prayer times, community Q&A, and Islamic learning app from Ankara, Türkiye." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="navbar">
+    <div class="brand">🕌 İslamı <span>öğreniyorum</span></div>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#faq">FAQ</a>
+      <a href="privacy-policy.html">Privacy</a>
+      <a href="mailto:info@learningislamapp.com">Contact</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <div class="badge">Available on iOS · Android · Web</div>
+    <h1>Learn Islam, track your prayers, <span class="accent">and grow together</span>.</h1>
+    <p>İslamı öğreniyorum helps Turkish and Turkic Muslims around the world keep accurate prayer times, ask questions, and stay connected with the community.</p>
+    <div class="cta-row">
+      <a href="privacy-policy.html" class="btn">Privacy Policy</a>
+      <a href="mailto:info@learningislamapp.com" class="btn-ghost">Contact Us</a>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="container">
+      <h2>What the app offers</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="icon">🕌</div>
+          <h3>Prayer Times</h3>
+          <p>Accurate namaz (prayer) times for cities across Türkiye and Europe, with a live countdown to the next prayer.</p>
+        </div>
+        <div class="card">
+          <div class="icon">💬</div>
+          <h3>Community Q&amp;A</h3>
+          <p>Ask questions about faith and life, and get helpful answers from fellow Muslims and AI assistance.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📰</div>
+          <h3>News &amp; Events</h3>
+          <p>Stay up to date with community events, iftar gatherings, and project developments.</p>
+        </div>
+        <div class="card">
+          <div class="icon">⚙️</div>
+          <h3>Personalized</h3>
+          <p>Switch between Turkish and English, choose a theme, and customize prayer-time notifications and sounds.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="content" id="faq">
+    <div class="container">
+      <h2>Frequently Asked Questions</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Is the app free?</h3>
+          <p>Yes. İslamı öğreniyorum is free to download and use.</p>
+        </div>
+        <div class="card">
+          <h3>How do I contact support?</h3>
+          <p>Email our support team at <a href="mailto:info@learningislamapp.com">info@learningislamapp.com</a>.</p>
+        </div>
+        <div class="card">
+          <h3>Where is the company located?</h3>
+          <p>Our team is based in Ankara, Türkiye.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="content" id="contact">
+    <div class="container">
+      <h2>Get in touch</h2>
+      <p>For support, feedback, or press inquiries, email us:</p>
+      <p class="contact-info" style="background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 20px; margin-top: 10px;">
+        <a href="mailto:info@learningislamapp.com" style="color: var(--primary); font-size: 18px;">info@learningislamapp.com</a>
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <div>© <span id="year"></span> İslamı öğreniyorum · Ankara, Türkiye</div>
+    <div style="margin-top: 6px;">
+      <a href="privacy-policy.html">Privacy Policy</a>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
