@@ -10,7 +10,8 @@
 // ============================================================
 
 // The main backend API (push notifications, AI answers, events).
-export const API_URL = 'https://api.learningislamapp.com';
+// Live on Render (free tier) at islami-ogreniyorum-server.onrender.com
+export const API_URL = 'https://islami-ogreniyorum-server.onrender.com';
 
 // Privacy policy URL - required by Apple App Store & Google Play.
 // This serves the page built in /website and hosted at learningislamapp.com.
