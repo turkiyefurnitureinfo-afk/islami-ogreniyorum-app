@@ -9,7 +9,7 @@ Support email: `info@learningislamapp.com`
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | **Target API 35** — Play blocks new releases targeting ≤34 after **31 Aug 2026**. Current build targets **34** (SDK 51 default). | ❌ Fix needed |
+| 1 | **Target API 35** — Play blocks new releases targeting ≤34 after **31 Aug 2026**. ✅ FIXED: `gradle.properties` now sets compile+target to **35**, with an edge-to-edge opt-out in `AppTheme`. Verify by installing the versionCode ≥4 APK on a device/emulator before store submission; plan the SDK 53 upgrade for proper insets support later. | 🔶 Fixed pending device check |
 | 2 | **Privacy policy URL live** — use `https://islami-ogreniyorum-server.onrender.com/privacy` until learningislamapp.com is connected. Verified HTTP 200. | ✅ Ready (swap later) |
 | 3 | **UGC reporting must actually work** — the ⚑ report buttons currently only `console.log`. Play requires in-app report/block for apps with user content. Wire them (even local "reported" feedback + server log) before review. | ❌ Fix needed |
 | 4 | Account deletion exists in-app (Settings → Danger Zone). Keep it. | ✅ |
