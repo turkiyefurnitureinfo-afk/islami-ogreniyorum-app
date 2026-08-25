@@ -662,6 +662,69 @@ export function makeStyles(palette) {
       paddingVertical: 20,
     },
 
+    // ---------- Edit / Delete content actions (shared Q&A + Community) ----------
+    contentActionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginLeft: 12,
+      gap: 12,
+    },
+    contentActionEdit: {
+      color: palette.accent,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    contentActionDelete: {
+      color: '#e05d5d',
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    contentEditInput: {
+      backgroundColor: palette.panel,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: palette.border,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      color: palette.text,
+      fontSize: 13,
+      marginTop: 8,
+      marginBottom: 6,
+      minHeight: 60,
+      textAlignVertical: 'top',
+    },
+    contentEditBtnRow: {
+      flexDirection: 'row',
+      alignSelf: 'flex-start',
+      gap: 10,
+      marginBottom: 8,
+    },
+    contentEditSaveBtn: {
+      backgroundColor: palette.primary,
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      alignItems: 'center',
+    },
+    contentEditSaveText: {
+      color: '#08131a',
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    contentEditCancelBtn: {
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    contentEditCancelText: {
+      color: palette.text,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+
     // ---------- News Tab ----------
     eventBlock: {
       backgroundColor: palette.card,

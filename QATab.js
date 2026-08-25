@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, View, Text, TextInput, Pressable, Linking, ActivityIndicator } from 'react-native';
 
 const QATab = ({
@@ -19,7 +19,71 @@ const QATab = ({
   answerFormOpen,
   setAnswerFormOpen,
   handleAIAnswer,
+  account,
+  handleEditQuestion,
+  handleDeleteQuestion,
+  handleEditAnswer,
+  handleDeleteAnswer,
 }) => {
+  // Inline edit state: only one field is edited at a time.
+  const [editKey, setEditKey] = useState(null); // e.g. 'q-123' or 'a-456'
+  const [draftText, setDraftText] = useState('');
+
+  const isOwn = (ownerEmail) =>
+    !!ownerEmail && !!account?.email && ownerEmail === account.email;
+
+  const startEdit = (key, currentText) => {
+    setEditKey(key);
+    setDraftText(currentText);
+  };
+
+  const cancelEdit = () => {
+    setEditKey(null);
+    setDraftText('');
+  };
+
+  /**
+   * Renders ✏️ Edit / 🗑 Delete controls for the user's own content, or the
+   * inline edit form when that item is being edited. Returns null otherwise.
+   */
+  const renderOwnerControls = (key, ownerEmail, originalText, onSave, onDelete) => {
+    if (!isOwn(ownerEmail)) return null;
+    if (editKey === key) {
+      return (
+        <View>
+          <TextInput
+            style={styles.contentEditInput}
+            value={draftText}
+            onChangeText={setDraftText}
+            multiline
+            autoFocus
+          />
+          <View style={styles.contentEditBtnRow}>
+            <Pressable
+              style={styles.contentEditSaveBtn}
+              onPress={() => { onSave(draftText); cancelEdit(); }}
+            >
+              <Text style={styles.contentEditSaveText}>{t?.save || 'Save'}</Text>
+            </Pressable>
+            <Pressable style={styles.contentEditCancelBtn} onPress={cancelEdit}>
+              <Text style={styles.contentEditCancelText}>{t?.cancel || 'Cancel'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.contentActionRow}>
+        <Pressable onPress={() => startEdit(key, originalText)}>
+          <Text style={styles.contentActionEdit}>✏️ {t?.edit || 'Edit'}</Text>
+        </Pressable>
+        <Pressable onPress={onDelete}>
+          <Text style={styles.contentActionDelete}>🗑 {t?.delete || 'Delete'}</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
   const handleReportQuestion = (questionId) => {
     // TODO: Send report to backend moderation system
     console.log(`Reported question: ${questionId}`);
@@ -84,6 +148,14 @@ const QATab = ({
                   {item.answers?.length || 0} {t?.answerCount || 'answers'}
                 </Text>
               </View>
+
+              {renderOwnerControls(
+                'q-' + item.id,
+                item.ownerEmail,
+                item.question,
+                (text) => handleEditQuestion(item.id, text),
+                () => handleDeleteQuestion(item.id)
+              )}
 
               {expandedQas[item.id] && (
                 <View style={styles.answerWrap}>
@@ -155,6 +227,13 @@ const QATab = ({
                               </Text>
                             </Pressable>
                           </View>
+                          {renderOwnerControls(
+                            'a-' + ans.id,
+                            ans.ownerEmail,
+                            ans.text,
+                            (text) => handleEditAnswer(item.id, ans.id, text),
+                            () => handleDeleteAnswer(item.id, ans.id)
+                          )}
                         </View>
                       ))
                     ) : (
@@ -211,6 +290,14 @@ const QATab = ({
                 {item.answers?.length || 0} {t?.answerCount || 'answers'}
               </Text>
             </View>
+
+            {renderOwnerControls(
+              'q-' + item.id,
+              item.ownerEmail,
+              item.question,
+              (text) => handleEditQuestion(item.id, text),
+              () => handleDeleteQuestion(item.id)
+            )}
 
             {expanded && (
               <View style={styles.answerWrap}>
@@ -282,6 +369,13 @@ const QATab = ({
                             </Text>
                           </Pressable>
                         </View>
+                        {renderOwnerControls(
+                          'a-' + ans.id,
+                          ans.ownerEmail,
+                          ans.text,
+                          (text) => handleEditAnswer(item.id, ans.id, text),
+                          () => handleDeleteAnswer(item.id, ans.id)
+                        )}
                       </View>
                     ))
                   ) : (

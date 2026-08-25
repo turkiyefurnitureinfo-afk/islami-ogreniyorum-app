@@ -16,9 +16,72 @@ const CommunityTab = ({
   newComment,
   setNewComment,
   handlePostComment,
+  account,
+  handleEditPost,
+  handleDeletePost,
+  handleEditComment,
+  handleDeleteComment,
 }) => {
   const [media, setMedia] = useState(null); // { type: 'image'|'video', uri }
   const [pickingMedia, setPickingMedia] = useState(false);
+  // Inline edit state: only one field is edited at a time.
+  const [editKey, setEditKey] = useState(null); // e.g. 'p-123' or 'c-456'
+  const [draftText, setDraftText] = useState('');
+
+  const isOwn = (ownerEmail) =>
+    !!ownerEmail && !!account?.email && ownerEmail === account.email;
+
+  const startEdit = (key, currentText) => {
+    setEditKey(key);
+    setDraftText(currentText);
+  };
+
+  const cancelEdit = () => {
+    setEditKey(null);
+    setDraftText('');
+  };
+
+  /**
+   * Renders ✏️ Edit / 🗑 Delete controls for the user's own content, or the
+   * inline edit form when that item is being edited. Returns null otherwise.
+   */
+  const renderOwnerControls = (key, ownerEmail, originalText, onSave, onDelete) => {
+    if (!isOwn(ownerEmail)) return null;
+    if (editKey === key) {
+      return (
+        <View>
+          <TextInput
+            style={styles.contentEditInput}
+            value={draftText}
+            onChangeText={setDraftText}
+            multiline
+            autoFocus
+          />
+          <View style={styles.contentEditBtnRow}>
+            <Pressable
+              style={styles.contentEditSaveBtn}
+              onPress={() => { onSave(draftText); cancelEdit(); }}
+            >
+              <Text style={styles.contentEditSaveText}>{t?.save || 'Save'}</Text>
+            </Pressable>
+            <Pressable style={styles.contentEditCancelBtn} onPress={cancelEdit}>
+              <Text style={styles.contentEditCancelText}>{t?.cancel || 'Cancel'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.contentActionRow}>
+        <Pressable onPress={() => startEdit(key, originalText)}>
+          <Text style={styles.contentActionEdit}>✏️ {t?.edit || 'Edit'}</Text>
+        </Pressable>
+        <Pressable onPress={onDelete}>
+          <Text style={styles.contentActionDelete}>🗑 {t?.delete || 'Delete'}</Text>
+        </Pressable>
+      </View>
+    );
+  };
 
   const pickImage = async () => {
     setPickingMedia(true);
@@ -150,6 +213,14 @@ const CommunityTab = ({
 
           <Text style={styles.communityPostText}>{post.text}</Text>
 
+          {renderOwnerControls(
+            'p-' + post.id,
+            post.ownerEmail,
+            post.text,
+            (text) => handleEditPost(post.id, text),
+            () => handleDeletePost(post.id)
+          )}
+
           {post.media && (
             <View style={styles.communityPostMedia}>
               {post.media.type === 'image' ? (
@@ -204,6 +275,13 @@ const CommunityTab = ({
                       </Text>
                     </Pressable>
                   </View>
+                  {renderOwnerControls(
+                    'c-' + comment.id,
+                    comment.commenterEmail,
+                    comment.text,
+                    (text) => handleEditComment(post.id, comment.id, text),
+                    () => handleDeleteComment(post.id, comment.id)
+                  )}
                 </View>
               ))
             ) : (

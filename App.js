@@ -6,6 +6,7 @@ import {
   Pressable,
   Platform,
   Linking,
+  Alert,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -477,6 +478,7 @@ export default function App() {
         href: '',
         likes: 0,
         likedByMe: false,
+        ownerEmail: account.email || null,
         answers: [],
       };
       setQAndA(prev => [newQ, ...prev]);
@@ -649,6 +651,7 @@ export default function App() {
         timestamp: language === 'tr' ? 'şimdi' : 'just now',
         likes: 0,
         likedByMe: false,
+        ownerEmail: account.email || null,
       };
       setQAndA(prev => prev.map(q => {
         if (q.id === questionId) {
@@ -698,6 +701,139 @@ export default function App() {
         );
       }
     }
+  };
+
+  // ---------- Edit / Delete own content ----------
+  // A user may only modify content they created themselves (matched by the
+  // account e-mail stored on the item at creation time).
+
+  const isOwnContent = (ownerEmail) =>
+    !!ownerEmail && !!account.email && ownerEmail === account.email;
+
+  // --- Q&A ---
+  const handleEditQuestion = (questionId, newText) => {
+    const text = (newText || '').trim();
+    if (!text) return;
+    setQAndA(prev => prev.map(q => (
+      q.id === questionId && isOwnContent(q.ownerEmail)
+        ? { ...q, question: text }
+        : q
+    )));
+  };
+
+  const handleDeleteQuestion = (questionId) => {
+    Alert.alert(
+      t.deleteQuestionConfirm || 'Delete this question?',
+      '',
+      [
+        { text: t.cancel || 'Cancel', style: 'cancel' },
+        {
+          text: t.delete || 'Delete',
+          style: 'destructive',
+          onPress: () => setQAndA(prev => prev.filter(q => !(
+            q.id === questionId && isOwnContent(q.ownerEmail)
+          ))),
+        },
+      ]
+    );
+  };
+
+  const handleEditAnswer = (questionId, answerId, newText) => {
+    const text = (newText || '').trim();
+    if (!text) return;
+    setQAndA(prev => prev.map(q => (
+      q.id === questionId
+        ? {
+            ...q,
+            answers: q.answers.map(a => (
+              a.id === answerId && isOwnContent(a.ownerEmail) ? { ...a, text } : a
+            )),
+          }
+        : q
+    )));
+  };
+
+  const handleDeleteAnswer = (questionId, answerId) => {
+    Alert.alert(
+      t.deleteAnswerConfirm || 'Delete this answer?',
+      '',
+      [
+        { text: t.cancel || 'Cancel', style: 'cancel' },
+        {
+          text: t.delete || 'Delete',
+          style: 'destructive',
+          onPress: () => setQAndA(prev => prev.map(q => (
+            q.id === questionId
+              ? { ...q, answers: q.answers.filter(a => !(
+                  a.id === answerId && isOwnContent(a.ownerEmail)
+                )) }
+              : q
+          ))),
+        },
+      ]
+    );
+  };
+
+  // --- Community ---
+  const handleEditPost = (postId, newText) => {
+    const text = (newText || '').trim();
+    if (!text) return;
+    setCommunityPosts(prev => prev.map(p => (
+      p.id === postId && isOwnContent(p.ownerEmail) ? { ...p, text } : p
+    )));
+  };
+
+  const handleDeletePost = (postId) => {
+    Alert.alert(
+      t.deletePostConfirm || 'Delete this post?',
+      '',
+      [
+        { text: t.cancel || 'Cancel', style: 'cancel' },
+        {
+          text: t.delete || 'Delete',
+          style: 'destructive',
+          onPress: () => setCommunityPosts(prev => prev.filter(p => !(
+            p.id === postId && isOwnContent(p.ownerEmail)
+          ))),
+        },
+      ]
+    );
+  };
+
+  const handleEditComment = (postId, commentId, newText) => {
+    const text = (newText || '').trim();
+    if (!text) return;
+    setCommunityPosts(prev => prev.map(p => (
+      p.id === postId
+        ? {
+            ...p,
+            comments: p.comments.map(c => (
+              c.id === commentId && isOwnContent(c.commenterEmail) ? { ...c, text } : c
+            )),
+          }
+        : p
+    )));
+  };
+
+  const handleDeleteComment = (postId, commentId) => {
+    Alert.alert(
+      t.deleteCommentConfirm || 'Delete this comment?',
+      '',
+      [
+        { text: t.cancel || 'Cancel', style: 'cancel' },
+        {
+          text: t.delete || 'Delete',
+          style: 'destructive',
+          onPress: () => setCommunityPosts(prev => prev.map(p => (
+            p.id === postId
+              ? { ...p, comments: p.comments.filter(c => !(
+                  c.id === commentId && isOwnContent(c.commenterEmail)
+                )) }
+              : p
+          ))),
+        },
+      ]
+    );
   };
 
   // ---------- Community Handlers ----------
@@ -929,6 +1065,11 @@ export default function App() {
             answerFormOpen={answerFormOpen}
             setAnswerFormOpen={setAnswerFormOpen}
             handleAIAnswer={handleAIAnswer}
+            account={account}
+            handleEditQuestion={handleEditQuestion}
+            handleDeleteQuestion={handleDeleteQuestion}
+            handleEditAnswer={handleEditAnswer}
+            handleDeleteAnswer={handleDeleteAnswer}
           />
         )}
         {activeTab === 'news' && <NewsTab styles={styles} projectEvents={projectEvents} t={t} newsItems={newsItems} scholarVideos={scholarVideos} />}
@@ -946,6 +1087,11 @@ export default function App() {
             newComment={newComment}
             setNewComment={setNewComment}
             handlePostComment={handlePostComment}
+            account={account}
+            handleEditPost={handleEditPost}
+            handleDeletePost={handleDeletePost}
+            handleEditComment={handleEditComment}
+            handleDeleteComment={handleDeleteComment}
           />
         )}
         {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} />}
