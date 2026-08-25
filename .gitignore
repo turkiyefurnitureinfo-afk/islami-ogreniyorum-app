@@ -23,3 +23,4 @@ server/build-log.txt
 # Scratch run logs
 server/t-out.txt
 server/t-err.txt
+dist-verify/
