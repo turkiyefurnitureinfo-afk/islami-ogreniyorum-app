@@ -19,3 +19,7 @@ service-account-key.json
 dist/
 *.log
 server/build-log.txt
+
+# Scratch run logs
+server/t-out.txt
+server/t-err.txt
