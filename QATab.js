@@ -24,6 +24,7 @@ const QATab = ({
   handleDeleteQuestion,
   handleEditAnswer,
   handleDeleteAnswer,
+  onReport,
 }) => {
   // Inline edit state: only one field is edited at a time.
   const [editKey, setEditKey] = useState(null); // e.g. 'q-123' or 'a-456'
@@ -84,8 +85,19 @@ const QATab = ({
     );
   };
 
+  // Moderation: hand the item up to App's confirm dialog (report / block).
+  const reportQuestion = (item) => onReport?.({
+    contentType: 'question',
+    contentId: item.serverPostId || item.id,
+    authorEmail: item.ownerEmail,
+  });
+  const reportAnswer = (question, ans) => onReport?.({
+    contentType: 'answer',
+    contentId: ans.serverContribId || ans.id,
+    authorEmail: ans.ownerEmail,
+  });
+
   const handleReportQuestion = (questionId) => {
-    // TODO: Send report to backend moderation system
     console.log(`Reported question: ${questionId}`);
   };
   // Prevent crash if qAndA is not an array.
@@ -152,6 +164,11 @@ const QATab = ({
                 <Text style={styles.qaAnswerCount}>
                   {item.answers?.length || 0} {t?.answerCount || 'answers'}
                 </Text>
+                {!isOwn(item.ownerEmail) && (
+                  <Pressable onPress={() => reportQuestion(item)} hitSlop={8}>
+                    <Text style={styles.contentActionDelete}>⚑</Text>
+                  </Pressable>
+                )}
               </View>
 
               {renderOwnerControls(
@@ -231,6 +248,11 @@ const QATab = ({
                                 {ans.likedByMe ? '❤️' : '🤍'} {ans.likes}
                               </Text>
                             </Pressable>
+                            {!isOwn(ans.ownerEmail) && (
+                              <Pressable onPress={() => reportAnswer(item, ans)} hitSlop={8}>
+                                <Text style={styles.contentActionDelete}>⚑</Text>
+                              </Pressable>
+                            )}
                           </View>
                           {renderOwnerControls(
                             'a-' + ans.id,
@@ -294,6 +316,11 @@ const QATab = ({
               <Text style={styles.qaAnswerCount}>
                 {item.answers?.length || 0} {t?.answerCount || 'answers'}
               </Text>
+              {!isOwn(item.ownerEmail) && (
+                <Pressable onPress={() => reportQuestion(item)} hitSlop={8}>
+                  <Text style={styles.contentActionDelete}>⚑</Text>
+                </Pressable>
+              )}
             </View>
 
             {renderOwnerControls(
@@ -373,6 +400,11 @@ const QATab = ({
                               {ans.likedByMe ? '❤️' : '🤍'} {ans.likes}
                             </Text>
                           </Pressable>
+                          {!isOwn(ans.ownerEmail) && (
+                            <Pressable onPress={() => reportAnswer(item, ans)} hitSlop={8}>
+                              <Text style={styles.contentActionDelete}>⚑</Text>
+                            </Pressable>
+                          )}
                         </View>
                         {renderOwnerControls(
                           'a-' + ans.id,

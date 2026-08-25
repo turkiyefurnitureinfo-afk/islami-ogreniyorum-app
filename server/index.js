@@ -378,6 +378,28 @@ app.get('/api/community/feed', async (req, res) => {
   }
 });
 
+// ---------- Moderation: user reports ----------
+// Play requires a working in-app reporting path for UGC. Reports land in the
+// `reports` collection (status:'open') for manual review.
+app.post('/api/reports', async (req, res) => {
+  const { contentType, contentId, reporterId, reason } = req.body;
+  const validTypes = ['question', 'answer', 'post', 'comment'];
+  if (!contentType || !validTypes.includes(contentType) || !contentId || !reporterId) {
+    return res.status(400).json({
+      error: `contentType (${validTypes.join('|')}), contentId and reporterId are required`,
+    });
+  }
+
+  await storage.addReport({
+    contentType,
+    contentId: String(contentId),
+    reporterId,
+    reason: typeof reason === 'string' ? reason.slice(0, 500) : '',
+  });
+  console.log(`Report filed: ${contentType}/${contentId} by ${reporterId}`);
+  res.json({ success: true });
+});
+
 app.post('/api/events/notify', async (req, res) => {
   const { title, body } = req.body;
   if (!title || !body) {

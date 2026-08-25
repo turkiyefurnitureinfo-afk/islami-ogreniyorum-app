@@ -38,6 +38,7 @@ import {
   notifyBackendCommunityComment,
   notifyBackendCommunityPostLike,
   notifyBackendCommunityCommentLike,
+  sendContentReport,
 } from './notifications.js';
 import { signInWithGoogle } from './googleAuth.js';
 import { API_URL } from './config.js';
@@ -87,6 +88,8 @@ export default function App() {
   // Server-provided times (Diyanet criteria via the backend). Null = offline,
   // in which case the on-device astronomical computation is used.
   const [remoteTimes, setRemoteTimes] = useState(null);
+  // Authors the user blocked (emails). Their content is hidden locally.
+  const [blockedUsers, setBlockedUsers] = useState([]);
   const [notificationsOn, setNotificationsOn] = useState(true);
   const [signedIn, setSignedIn] = useState(false);
   const [authMode, setAuthMode] = useState('signup');
@@ -143,6 +146,7 @@ export default function App() {
         if (savedSettings.notificationsOn !== undefined) setNotificationsOn(savedSettings.notificationsOn);
         if (savedSettings.notificationSound) setNotificationSound(savedSettings.notificationSound);
         if (savedSettings.prayerMethod) setPrayerMethod(savedSettings.prayerMethod);
+        if (Array.isArray(savedSettings.blockedUsers)) setBlockedUsers(savedSettings.blockedUsers);
         if (savedSettings.customLocation) {
           setCustomLocation(savedSettings.customLocation);
         } else {
@@ -235,8 +239,8 @@ export default function App() {
   // Persist settings when they change (only after initial load)
   useEffect(() => {
     if (!hydrated) return;
-    saveSettings({ theme, language, notificationsOn, notificationSound, customLocation, prayerMethod });
-  }, [hydrated, theme, language, notificationsOn, notificationSound, customLocation, prayerMethod]);
+    saveSettings({ theme, language, notificationsOn, notificationSound, customLocation, prayerMethod, blockedUsers });
+  }, [hydrated, theme, language, notificationsOn, notificationSound, customLocation, prayerMethod, blockedUsers]);
 
   // Persist Q&A and community data when they change (only after initial load)
   useEffect(() => {
@@ -1028,6 +1032,62 @@ export default function App() {
     }
   }, [activeTab, signedIn]);
 
+  // ---------- Moderation: report content / block authors ----------
+  // Play requires a working report path for UGC. Reports are stored
+  // server-side; blocking hides an author's content locally.
+
+  const handleReportContent = ({ contentType, contentId, authorEmail }) => {
+    const actions = [
+      {
+        text: t.blockUser || 'Block user',
+        style: 'destructive',
+        onPress: () => {
+          if (!authorEmail) return;
+          setBlockedUsers(prev => (
+            prev.includes(authorEmail) ? prev : [...prev, authorEmail]
+          ));
+          Alert.alert(t.blockedToast || 'User blocked.');
+        },
+      },
+      {
+        text: t.report || 'Report',
+        style: 'destructive',
+        onPress: async () => {
+          const ok = await sendContentReport({
+            contentType,
+            contentId,
+            reporterId: account.email || 'guest',
+          });
+          Alert.alert(
+            ok ? (t.reportedThanks || 'Report received. Thank you.')
+               : (t.reportFailed || 'Could not send the report right now.')
+          );
+        },
+      },
+      { text: t.cancel || 'Cancel', style: 'cancel' },
+    ];
+    Alert.alert(t.reportContentTitle || 'Report this content?', '', actions, { cancelable: true });
+  };
+
+  // Hide blocked authors from both feeds (and their nested answers/comments).
+  const visibleQAndA = useMemo(() => (
+    qAndA
+      .filter(q => !q.ownerEmail || !blockedUsers.includes(q.ownerEmail))
+      .map(q => ({
+        ...q,
+        answers: (q.answers || []).filter(a => !a.ownerEmail || !blockedUsers.includes(a.ownerEmail)),
+      }))
+  ), [qAndA, blockedUsers]);
+
+  const visibleCommunityPosts = useMemo(() => (
+    communityPosts
+      .filter(p => !p.ownerEmail || !blockedUsers.includes(p.ownerEmail))
+      .map(p => ({
+        ...p,
+        comments: (p.comments || []).filter(c => !c.commenterEmail || !blockedUsers.includes(c.commenterEmail)),
+      }))
+  ), [communityPosts, blockedUsers]);
+
   // ---------- Community Handlers ----------
 
   const handleCreatePost = (media) => {
@@ -1249,7 +1309,7 @@ export default function App() {
             styles={styles}
             palette={palette}
             t={t}
-            qAndA={qAndA}
+            qAndA={visibleQAndA}
             expandedQas={expandedQas}
             setExpandedQas={setExpandedQas}
             newQuestion={newQuestion}
@@ -1268,6 +1328,7 @@ export default function App() {
             handleDeleteQuestion={handleDeleteQuestion}
             handleEditAnswer={handleEditAnswer}
             handleDeleteAnswer={handleDeleteAnswer}
+            onReport={handleReportContent}
           />
         )}
         {activeTab === 'news' && <NewsTab styles={styles} projectEvents={projectEvents} t={t} newsItems={newsItems} scholarVideos={scholarVideos} />}
@@ -1276,7 +1337,7 @@ export default function App() {
             styles={styles}
             palette={palette}
             t={t}
-            communityPosts={communityPosts}
+            communityPosts={visibleCommunityPosts}
             newPostText={newPostText}
             setNewPostText={setNewPostText}
             handleCreatePost={handleCreatePost}
@@ -1290,6 +1351,7 @@ export default function App() {
             handleDeletePost={handleDeletePost}
             handleEditComment={handleEditComment}
             handleDeleteComment={handleDeleteComment}
+            onReport={handleReportContent}
           />
         )}
         {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} />}

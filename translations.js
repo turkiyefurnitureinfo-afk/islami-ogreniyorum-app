@@ -178,6 +178,13 @@ export const translations = {
     methodKarachi: 'Karaçi',
     sourceDiyanetOnline: 'Diyanet kriterleri (çevrimiçi)',
     sourceDevice: 'Cihazda hesaplandı',
+    // Moderation
+    report: 'Bildir',
+    reportContentTitle: 'Bu içeriği bildirmek istiyor musunuz?',
+    reportedThanks: 'Bildirim alındı. Teşekkürler.',
+    reportFailed: 'Bildirim şu anda gönderilemedi.',
+    blockUser: 'Kullanıcıyı engelle',
+    blockedToast: 'Kullanıcı engellendi.',
     // Q&A misc
     searchWeb: 'Webde ara',
     noQuestionsYet: 'Henüz soru yok. İlk soruyu sen sor!',
@@ -357,6 +364,13 @@ export const translations = {
     methodKarachi: 'Karachi',
     sourceDiyanetOnline: 'Diyanet criteria (online)',
     sourceDevice: 'Computed on device',
+    // Moderation
+    report: 'Report',
+    reportContentTitle: 'Report this content?',
+    reportedThanks: 'Report received. Thank you.',
+    reportFailed: 'Could not send the report right now.',
+    blockUser: 'Block user',
+    blockedToast: 'User blocked.',
     // Scholars on YouTube
     scholarVideos: '📺 Video Messages from Scholars',
     watchOnYoutube: 'Watch on YouTube',

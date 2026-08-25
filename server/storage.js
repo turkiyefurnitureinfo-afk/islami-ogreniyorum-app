@@ -114,6 +114,7 @@ const memDevices = new Map();   // userId -> { expoPushToken, name }
 const memPosts = new Map();     // postId -> { ownerUserId }
 const memContribs = new Map();  // "postId:contribId" -> { userId, likes }
 const memCommunity = new Map(); // postId -> { ownerUserId, comments: Map(commentId -> {userId}) }
+const memReports = [];          // moderation queue
 let memNextPostId = 1;
 let memNextContribId = 1;
 
@@ -224,6 +225,11 @@ const memImpl = {
 
   async counts() {
     return { devices: memDevices.size, posts: memPosts.size, communityPosts: memCommunity.size };
+  },
+
+  async addReport(report) {
+    memReports.push({ ...report, createdAt: new Date().toISOString() });
+    return true;
   },
 };
 
@@ -375,6 +381,15 @@ const fsImpl = {
       communityPosts: cp.data().count,
     };
   },
+
+  async addReport(report) {
+    await db.collection('reports').add({
+      ...report,
+      createdAt: new Date().toISOString(),
+      status: 'open',
+    });
+    return true;
+  },
 };
 
 /* ------------------------------ Dispatchers ------------------------------ */
@@ -397,5 +412,6 @@ module.exports = {
   getCommunityComment: (...a) => impl().getCommunityComment(...a),
   listQAPosts: (...a) => impl().listQAPosts(...a),
   listCommunityPosts: (...a) => impl().listCommunityPosts(...a),
+  addReport: (...a) => impl().addReport(...a),
   counts: (...a) => impl().counts(...a),
 };

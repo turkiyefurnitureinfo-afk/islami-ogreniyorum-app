@@ -21,6 +21,7 @@ const CommunityTab = ({
   handleDeletePost,
   handleEditComment,
   handleDeleteComment,
+  onReport,
 }) => {
   const [media, setMedia] = useState(null); // { type: 'image'|'video', uri }
   const [pickingMedia, setPickingMedia] = useState(false);
@@ -124,15 +125,18 @@ const CommunityTab = ({
     setMedia(null);
   };
 
-  const handleReportPost = (postId) => {
-    // TODO: Send report to backend moderation system
-    console.log(`Reported post: ${postId}`);
-  };
-
-  const handleReportComment = (postId, commentId) => {
-    // TODO: Send report to backend moderation system
-    console.log(`Reported comment: ${postId}/${commentId}`);
-  };
+  // Moderation: hand the item up to App's confirm dialog (report / block).
+  const reportPost = (post) => onReport?.({
+    contentType: 'post',
+    contentId: String(post.id),
+    authorEmail: post.ownerEmail,
+  });
+  const reportComment = (post, comment) => onReport?.({
+    contentType: 'comment',
+    contentId: comment.id,
+    authorEmail: comment.commenterEmail,
+    parentPostId: post.id,
+  });
 
   const handleBlockUser = (userName) => {
     // TODO: Store blocked users and filter their content
@@ -203,7 +207,7 @@ const CommunityTab = ({
               <Text style={styles.postUser}>{post.user.name}</Text>
               <Text style={styles.postTime}>{post.timestamp}</Text>
             </View>
-            <Pressable onPress={() => handleReportPost(post.id)} style={{ padding: 4 }}>
+            <Pressable onPress={() => reportPost(post)} style={{ padding: 4 }}>
               <Text style={{ color: '#e05d5d', fontSize: 14 }}>⚑</Text>
             </Pressable>
             <Pressable onPress={() => handleBlockUser(post.user.name)} style={{ padding: 4 }}>
@@ -262,7 +266,7 @@ const CommunityTab = ({
                       <Text style={styles.communityCommentUser}>{comment.user.name}</Text>
                       <Text style={styles.communityCommentTime}>{comment.timestamp}</Text>
                     </View>
-                    <Pressable onPress={() => handleReportComment(post.id, comment.id)} style={{ padding: 2 }}>
+                    <Pressable onPress={() => reportComment(post, comment)} style={{ padding: 2 }}>
                       <Text style={{ color: '#e05d5d', fontSize: 12 }}>⚑</Text>
                     </Pressable>
                   </View>

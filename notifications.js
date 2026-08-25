@@ -500,6 +500,30 @@ export async function notifyBackendCommunityPost(postId, userId, name, text, med
 }
 
 /**
+ * File a moderation report for a piece of user-generated content.
+ *
+ * @param {object} p
+ * @param {'question'|'answer'|'post'|'comment'} p.contentType
+ * @param {string|number} p.contentId - server id when known, else local id
+ * @param {string} p.reporterId - the reporting user's email/id
+ * @param {string} [p.reason] - optional free-text reason
+ * @returns {Promise<boolean>}
+ */
+export async function sendContentReport({ contentType, contentId, reporterId, reason }) {
+  try {
+    const response = await fetch(`${API_URL}/api/reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType, contentId, reporterId, reason }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.error('Failed to send content report:', error);
+    return false;
+  }
+}
+
+/**
  * Notify a community post's author that someone commented on their post.
  *
  * @param {number} postId - the post's local ID
