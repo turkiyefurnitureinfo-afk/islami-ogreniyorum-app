@@ -366,12 +366,12 @@ export async function unregisterDeviceFromBackend(userId) {
  * @param {string} userId - the author's user ID
  * @param {string} question - the question text
  */
-export async function notifyBackendNewQuestion(userId, question) {
+export async function notifyBackendNewQuestion(userId, question, name) {
   try {
     const response = await fetch(`${API_URL}/api/posts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, question }),
+      body: JSON.stringify({ userId, question, name }),
     });
     if (!response.ok) return { ok: false, postId: null };
     const data = await response.json().catch(() => ({}));
@@ -390,12 +390,12 @@ export async function notifyBackendNewQuestion(userId, question) {
  * @param {string} userId - the commenter's user ID
  * @param {string} text - the comment text
  */
-export async function notifyBackendNewContribution(postId, userId, text) {
+export async function notifyBackendNewContribution(postId, userId, text, name) {
   try {
     const response = await fetch(`${API_URL}/api/posts/${postId}/contributions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, text }),
+      body: JSON.stringify({ userId, text, name }),
     });
     if (!response.ok) return { ok: false, contributionId: null };
     const data = await response.json().catch(() => ({}));
@@ -485,12 +485,12 @@ export async function scheduleEventNotification({ title, body, eventDate, sound 
  * @param {string} userId - the author's user ID (email)
  * @param {string} name - the author's display name
  */
-export async function notifyBackendCommunityPost(postId, userId, name) {
+export async function notifyBackendCommunityPost(postId, userId, name, text, mediaType, mediaUri) {
   try {
     const response = await fetch(`${API_URL}/api/community/posts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ postId, userId, name }),
+      body: JSON.stringify({ postId, userId, name, text, mediaType, mediaUri }),
     });
     return response.ok;
   } catch (error) {

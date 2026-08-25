@@ -170,6 +170,14 @@ export const translations = {
     deletePostConfirm: 'Bu gönderiyi silmek istiyor musunuz?',
     deleteCommentConfirm: 'Bu yorumu silmek istiyor musunuz?',
     deleted: 'Silindi',
+    // Prayer calculation method
+    calculationMethod: 'Hesaplama Yöntemi',
+    methodDiyanet: 'Diyanet',
+    methodEgypt: 'Mısır',
+    methodMakkah: 'Mekke',
+    methodKarachi: 'Karaçi',
+    sourceDiyanetOnline: 'Diyanet kriterleri (çevrimiçi)',
+    sourceDevice: 'Cihazda hesaplandı',
     // Q&A misc
     searchWeb: 'Webde ara',
     noQuestionsYet: 'Henüz soru yok. İlk soruyu sen sor!',
@@ -341,6 +349,14 @@ export const translations = {
     deletePostConfirm: 'Delete this post?',
     deleteCommentConfirm: 'Delete this comment?',
     deleted: 'Deleted',
+    // Prayer calculation method
+    calculationMethod: 'Calculation Method',
+    methodDiyanet: 'Diyanet',
+    methodEgypt: 'Egypt',
+    methodMakkah: 'Makkah',
+    methodKarachi: 'Karachi',
+    sourceDiyanetOnline: 'Diyanet criteria (online)',
+    sourceDevice: 'Computed on device',
     // Scholars on YouTube
     scholarVideos: '📺 Video Messages from Scholars',
     watchOnYoutube: 'Watch on YouTube',

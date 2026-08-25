@@ -14,6 +14,7 @@ const PrayerTab = ({
   locating,
   locationError,
   onDetectLocation,
+  sourceLabel,
 }) => {
   return (
     <ScrollView contentContainerStyle={styles.contentPadding}>
@@ -22,6 +23,9 @@ const PrayerTab = ({
           <View style={{ flex: 1 }}>
             <Text style={styles.cardLabel}>{t.location}</Text>
             <Text style={styles.locationName}>{locationName}</Text>
+            {!!sourceLabel && (
+              <Text style={styles.settingValue}>{sourceLabel}</Text>
+            )}
             {!!locationError && (
               <Text style={styles.locationErrorText}>{locationError}</Text>
             )}

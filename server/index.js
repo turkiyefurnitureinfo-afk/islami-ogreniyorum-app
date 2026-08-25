@@ -5,6 +5,7 @@ const cors = require('cors');
 const { Expo } = require('expo-server-sdk');
 const { getAIAnswer } = require('./ai-answer');
 const { collectNews, collectScholarVideos } = require('./news-collector');
+const { getPrayerTimes } = require('./prayer-times');
 
 const app = express();
 app.use(cors());
@@ -135,12 +136,12 @@ app.post('/api/unregister', (req, res) => {
 
 // Post a new question -> notify all other users
 app.post('/api/posts', async (req, res) => {
-  const { userId, question } = req.body;
+  const { userId, question, name } = req.body;
   if (!userId || !question) {
     return res.status(400).json({ error: 'userId and question are required' });
   }
 
-  const postId = await storage.createQAPost(userId, question);
+  const postId = await storage.createQAPost(userId, question, name || null);
 
   const author = await storage.getDevice(userId);
   const authorName = author?.name || 'A user';
@@ -164,7 +165,7 @@ app.post('/api/posts', async (req, res) => {
 // Add a contribution/comment -> notify the question author
 app.post('/api/posts/:postId/contributions', async (req, res) => {
   const { postId } = req.params;
-  const { userId, text } = req.body;
+  const { userId, text, name } = req.body;
   if (!userId || !text) {
     return res.status(400).json({ error: 'userId and text are required' });
   }
@@ -174,7 +175,7 @@ app.post('/api/posts/:postId/contributions', async (req, res) => {
     return res.status(404).json({ error: 'Post not found' });
   }
 
-  const contribId = await storage.addQAContribution(postId, userId, text);
+  const contribId = await storage.addQAContribution(postId, userId, text, name || null);
 
   // Notify the question author (if not the same user)
   if (post.ownerUserId !== userId) {
@@ -219,18 +220,46 @@ app.post('/api/posts/:postId/contributions/:contribId/like', async (req, res) =>
   res.json({ success: true, likes: result.likes });
 });
 
+// ---------- Prayer times (Diyanet convention, worldwide) ----------
+// Proxies AlAdhan (method 13 = Diyanet İşleri Başkanlığı criteria) so the app
+// can show trusted, official-convention times for ANY coordinate on earth.
+// Falls back gracefully: the app keeps its on-device computation when this
+// endpoint is unreachable.
+app.get('/api/prayer-times', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) {
+    return res.status(400).json({ error: 'lat and lng query params are required numbers' });
+  }
+  const tz = req.query.tz !== undefined ? parseFloat(req.query.tz) : undefined;
+  const method = String(req.query.method || 'diyanet');
+  try {
+    const payload = await getPrayerTimes({ lat, lng, tz, method });
+    res.json({ success: true, ...payload });
+  } catch (error) {
+    console.error('[prayer-times] upstream failed:', error.message);
+    res.status(502).json({ success: false, error: 'Prayer-time provider unavailable' });
+  }
+});
+
 // ---------- Community posts ----------
 // The app is local-first: it keeps its own post/comment IDs. Devices register
 // their posts here so comments/likes can be routed back to the right author.
 
-// Register a community post (called by the author's device after creating it)
+// Register a community post (called by the author's device after creating it).
+// Stores the full content so every device can fetch the shared feed.
 app.post('/api/community/posts', async (req, res) => {
-  const { postId, userId } = req.body;
+  const { postId, userId, text, name, mediaType, mediaUri } = req.body;
   if (!postId || !userId) {
     return res.status(400).json({ error: 'postId and userId are required' });
   }
 
-  await storage.registerCommunityPost(postId, userId);
+  await storage.registerCommunityPost(postId, userId, {
+    text: typeof text === 'string' ? text : '',
+    authorName: name || null,
+    mediaType: mediaType || null,
+    mediaUri: mediaUri || null,
+  });
   console.log(`Community post ${postId} registered for ${userId}`);
   res.json({ success: true });
 });
@@ -248,7 +277,10 @@ app.post('/api/community/posts/:postId/comments', async (req, res) => {
     return res.status(404).json({ error: 'Post not found' });
   }
 
-  await storage.setCommunityComment(postId, commentId, userId);
+  await storage.setCommunityComment(postId, commentId, userId, {
+    text: typeof text === 'string' ? text : '',
+    authorName: name || null,
+  });
 
   // Notify the post owner (if the commenter isn't the owner)
   if (post.ownerUserId !== userId) {
@@ -320,6 +352,32 @@ app.post('/api/community/posts/:postId/comments/:commentId/like', async (req, re
 });
 
 // Broadcast an upcoming event notification to all users
+// ---------- Shared feeds ----------
+// Devices pull these to see everyone's questions/posts (the write paths above
+// persist full content; these endpoints hand it back out).
+
+app.get('/api/qa/feed', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const items = await storage.listQAPosts(limit);
+    res.json({ success: true, items });
+  } catch (error) {
+    console.error('[qa-feed] failed:', error.message);
+    res.status(500).json({ success: false, error: 'Feed unavailable' });
+  }
+});
+
+app.get('/api/community/feed', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const items = await storage.listCommunityPosts(limit);
+    res.json({ success: true, items });
+  } catch (error) {
+    console.error('[community-feed] failed:', error.message);
+    res.status(500).json({ success: false, error: 'Feed unavailable' });
+  }
+});
+
 app.post('/api/events/notify', async (req, res) => {
   const { title, body } = req.body;
   if (!title || !body) {

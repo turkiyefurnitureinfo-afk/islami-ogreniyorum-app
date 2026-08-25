@@ -3,9 +3,19 @@ import { ScrollView, View, Text, Pressable, Switch, TextInput, Modal, Alert, Lin
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './config.js';
 import { clearAccount, clearAllData } from './storage.js';
 
-const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, account, setAccount, saveAccount, isGoogleUser, setSignedIn }) => {
+const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, saveAccount, isGoogleUser, setSignedIn }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
+
+  // Calculation-method chips (labels localized where they have names)
+  const PRAYER_METHODS = [
+    { key: 'diyanet', label: getTranslation('methodDiyanet', 'Diyanet') },
+    { key: 'mwl', label: 'MWL' },
+    { key: 'isna', label: 'ISNA' },
+    { key: 'egypt', label: getTranslation('methodEgypt', 'Egypt') },
+    { key: 'makkah', label: getTranslation('methodMakkah', 'Makkah') },
+    { key: 'karachi', label: getTranslation('methodKarachi', 'Karachi') },
+  ];
 
   // ---- Edit Profile / Change Email / Change Password modal state ----
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -155,6 +165,27 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
             <Text style={styles.modeButtonText}>{getTranslation('english', 'English')}</Text>
           </Pressable>
         </View>
+      </View>
+
+      <View style={styles.settingCard}>
+        <View style={styles.settingHeader}>
+          <Text style={styles.settingTitle}>{getTranslation('calculationMethod', 'Calculation Method')}</Text>
+        </View>
+
+        <View style={styles.soundList}>
+          {PRAYER_METHODS.map((m) => (
+            <Pressable
+              key={m.key}
+              onPress={() => setPrayerMethod(m.key)}
+              style={[styles.soundItem, prayerMethod === m.key && styles.soundItemActive]}
+            >
+              <Text style={styles.soundText}>{m.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {!!prayerSourceLabel && (
+          <Text style={styles.settingValue}>{prayerSourceLabel}</Text>
+        )}
       </View>
 
       <View style={styles.settingCard}>

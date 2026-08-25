@@ -98,10 +98,15 @@ const QATab = ({
   }
 
   // Find top 2 most-liked questions for the "Most Asked" section.
+  // Ids can be numeric (local) or strings ('srv-…', server) — compare safely.
+  const cmpNewestFirst = (a, b) => {
+    if (typeof a.id === 'number' && typeof b.id === 'number') return b.id - a.id;
+    return String(b.id).localeCompare(String(a.id));
+  };
   const mostAsked = [...qAndA].sort((a, b) => b.likes - a.likes).slice(0, 2);
   const mostAskedIds = mostAsked.map(q => q.id);
   // Filter out most-asked questions and sort the rest by date (newest first).
-  const restQuestions = qAndA.filter(q => !mostAskedIds.includes(q.id)).sort((a, b) => b.id - a.id);
+  const restQuestions = qAndA.filter(q => !mostAskedIds.includes(q.id)).sort(cmpNewestFirst);
 
   return (
     <ScrollView contentContainerStyle={styles.contentPadding}>

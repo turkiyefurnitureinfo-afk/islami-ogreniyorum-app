@@ -19,7 +19,7 @@ import {
   COMMUNITY_POSTS,
 } from './data.js';
 import { translations } from './translations.js';
-import { computeTimes, formatClock } from './utils.js';
+import { computeTimes, formatClock, timeAgo } from './utils.js';
 import { getDeviceLocale, localeToLanguage } from './locale.js';
 import { detectLocation, autoDetectLocation } from './locationService.js';
 import { makeStyles } from './styles.js';
@@ -82,6 +82,11 @@ export default function App() {
   // initial defaults during startup.
   const [hydrated, setHydrated] = useState(false);
   const [notificationSound, setNotificationSound] = useState('Sistem Varsayılanı');
+  // Prayer-time calculation convention (diyanet | mwl | isna | egypt | makkah | karachi)
+  const [prayerMethod, setPrayerMethod] = useState('diyanet');
+  // Server-provided times (Diyanet criteria via the backend). Null = offline,
+  // in which case the on-device astronomical computation is used.
+  const [remoteTimes, setRemoteTimes] = useState(null);
   const [notificationsOn, setNotificationsOn] = useState(true);
   const [signedIn, setSignedIn] = useState(false);
   const [authMode, setAuthMode] = useState('signup');
@@ -137,6 +142,7 @@ export default function App() {
         if (savedSettings.language) setLanguage(savedSettings.language);
         if (savedSettings.notificationsOn !== undefined) setNotificationsOn(savedSettings.notificationsOn);
         if (savedSettings.notificationSound) setNotificationSound(savedSettings.notificationSound);
+        if (savedSettings.prayerMethod) setPrayerMethod(savedSettings.prayerMethod);
         if (savedSettings.customLocation) {
           setCustomLocation(savedSettings.customLocation);
         } else {
@@ -229,8 +235,8 @@ export default function App() {
   // Persist settings when they change (only after initial load)
   useEffect(() => {
     if (!hydrated) return;
-    saveSettings({ theme, language, notificationsOn, notificationSound, customLocation });
-  }, [hydrated, theme, language, notificationsOn, notificationSound, customLocation]);
+    saveSettings({ theme, language, notificationsOn, notificationSound, customLocation, prayerMethod });
+  }, [hydrated, theme, language, notificationsOn, notificationSound, customLocation, prayerMethod]);
 
   // Persist Q&A and community data when they change (only after initial load)
   useEffect(() => {
@@ -287,9 +293,13 @@ export default function App() {
         return;
       }
 
-      // Compute today's prayer times as a snapshot for scheduling
+      // Compute today's prayer times as a snapshot for scheduling.
+      // Prefers the server-provided Diyanet-convention times; falls back to
+      // the on-device astronomical calculation when offline.
       const today = new Date();
-      const todayTimes = computeTimes(today, city.lat, city.lng, city.tz);
+      const todayTimes = remoteTimes
+        ? remoteTimes.timings
+        : computeTimes(today, city.lat, city.lng, city.tz, prayerMethod);
       await schedulePrayerNotifications({
         times: todayTimes,
         language,
@@ -349,9 +359,43 @@ export default function App() {
     return () => {
       isActive = false;
     };
-  }, [signedIn, notificationsOn, cityKey, customLocation, language, notificationSound, newsItems]);
+  }, [signedIn, notificationsOn, cityKey, customLocation, language, notificationSound, newsItems, remoteTimes, prayerMethod]);
 
-  const times = useMemo(() => computeTimes(now, city.lat, city.lng, city.tz), [now, city]);
+  // Fetch trusted prayer times from the backend (AlAdhan method 13 = Diyanet).
+  // Silent-fail: when unreachable the device computation below takes over.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRemoteTimes() {
+      try {
+        const url =
+          `${API_URL}/api/prayer-times?lat=${encodeURIComponent(city.lat)}` +
+          `&lng=${encodeURIComponent(city.lng)}&tz=${encodeURIComponent(city.tz)}` +
+          `&method=${encodeURIComponent(prayerMethod)}`;
+        const res = await fetch(url, { method: 'GET' });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        if (!cancelled && data && data.success && data.timings) {
+          setRemoteTimes({ timings: data.timings, method: data.method });
+        } else if (!cancelled) {
+          setRemoteTimes(null);
+        }
+      } catch (e) {
+        if (!cancelled) setRemoteTimes(null);
+      }
+    }
+    loadRemoteTimes();
+    return () => { cancelled = true; };
+  }, [city.lat, city.lng, city.tz, prayerMethod]);
+
+  const computedTimes = useMemo(
+    () => computeTimes(now, city.lat, city.lng, city.tz, prayerMethod),
+    [now, city, prayerMethod]
+  );
+  // Server (Diyanet-convention) times win when available; device math otherwise.
+  const times = remoteTimes ? remoteTimes.timings : computedTimes;
+  const prayerSourceLabel = remoteTimes
+    ? t?.sourceDiyanetOnline || 'Diyanet criteria (online)'
+    : t?.sourceDevice || 'Computed on device';
   const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
 
   const nextPrayer = useMemo(() => {
@@ -498,7 +542,7 @@ export default function App() {
       // Register the question with the backend so other users get a push,
       // then store the server-assigned ID on this question so later answers
       // and likes can be routed back to the right authors.
-      notifyBackendNewQuestion(account.email || 'guest', newQuestion.trim())
+      notifyBackendNewQuestion(account.email || 'guest', newQuestion.trim(), account.fullName || null)
         .then((result) => {
           if (result && result.ok && result.postId) {
             setQAndA(prev => prev.map(q => (
@@ -669,7 +713,8 @@ export default function App() {
         notifyBackendNewContribution(
           answeredQuestion.serverPostId,
           account.email || 'guest',
-          answerText
+          answerText,
+          account.fullName || null
         )
           .then((result) => {
             if (result && result.ok && result.contributionId) {
@@ -836,6 +881,153 @@ export default function App() {
     );
   };
 
+  // ---------- Shared feed sync ----------
+  // Pulls everyone's questions/posts from the backend and merges them into
+  // the local-first stores, so users actually see each other's content.
+  // Offline / sleeping-server => silent no-op, local experience untouched.
+
+  const lastFeedSyncRef = React.useRef(0);
+
+  function normalizeServerQA(doc) {
+    return {
+      id: 'srv-' + doc.id,
+      serverPostId: doc.id,
+      question: doc.question || '',
+      answer: '',
+      source: '',
+      href: '',
+      likes: doc.likes || 0,
+      likedByMe: false,
+      ownerEmail: doc.ownerUserId || null,
+      answers: (doc.contributions || []).map((c) => ({
+        id: 'srv-' + doc.id + '-' + c.id,
+        serverContribId: c.id,
+        user: { name: c.authorName || '👤', avatar: '👤' },
+        text: c.text || '',
+        timestamp: timeAgo(c.createdAt, language),
+        likes: c.likes || 0,
+        likedByMe: false,
+        ownerEmail: c.userId || null,
+      })),
+      timestamp: timeAgo(doc.createdAt, language),
+    };
+  }
+
+  function normalizeServerCommunityPost(doc) {
+    return {
+      // Firestore doc id == the author's original local numeric post id, so
+      // comment/like routing keeps working on other devices.
+      id: doc.id,
+      user: { name: doc.authorName || '👤', avatar: '👤' },
+      ownerEmail: doc.ownerUserId || null,
+      text: doc.text || '',
+      timestamp: timeAgo(doc.createdAt, language),
+      likes: doc.likes || 0,
+      likedByMe: false,
+      media:
+        doc.mediaType && doc.mediaUri
+          ? { type: doc.mediaType, uri: doc.mediaUri }
+          : null,
+      comments: (doc.comments || []).map((c) => ({
+        id: 'srv-' + doc.id + '-' + c.id,
+        user: { name: c.authorName || '👤', avatar: '👤' },
+        commenterEmail: c.userId || null,
+        text: c.text || '',
+        timestamp: timeAgo(c.createdAt, language),
+        likes: 0,
+        likedByMe: false,
+      })),
+    };
+  }
+
+  const syncFeeds = async (force = false) => {
+    if (!signedIn) return;
+    const stamp = Date.now();
+    if (!force && stamp - lastFeedSyncRef.current < 60000) return;
+    lastFeedSyncRef.current = stamp;
+
+    try {
+      const [qaRes, commRes] = await Promise.all([
+        fetch(`${API_URL}/api/qa/feed`).catch(() => null),
+        fetch(`${API_URL}/api/community/feed`).catch(() => null),
+      ]);
+
+      if (qaRes && qaRes.ok) {
+        const data = await qaRes.json().catch(() => null);
+        if (data && Array.isArray(data.items)) {
+          const serverQ = data.items.map(normalizeServerQA);
+          const serverById = new Map(serverQ.map((q) => [q.serverPostId, q]));
+          setQAndA((prev) => {
+            const out = [];
+            for (const item of prev) {
+              if (item.serverPostId && serverById.has(item.serverPostId)) {
+                // Refresh our synced copy but keep identity & like state.
+                const fresh = serverById.get(item.serverPostId);
+                out.push({
+                  ...fresh,
+                  id: item.id,
+                  likedByMe: item.likedByMe,
+                  ownerEmail: item.ownerEmail || fresh.ownerEmail,
+                });
+                serverById.delete(item.serverPostId);
+              } else if (!item.serverPostId && !item.ownerEmail) {
+                // Seeded sample content: keep only while there's no real feed.
+                if (serverQ.length === 0) out.push(item);
+              } else {
+                out.push(item); // my unsynced drafts or orphans
+              }
+            }
+            for (const remaining of serverById.values()) out.push(remaining);
+            return out;
+          });
+        }
+      }
+
+      if (commRes && commRes.ok) {
+        const data = await commRes.json().catch(() => null);
+        if (data && Array.isArray(data.items)) {
+          const serverP = data.items.map(normalizeServerCommunityPost);
+          const byRawId = new Map(serverP.map((p) => [String(p.id), p]));
+          setCommunityPosts((prev) => {
+            const out = [];
+            const consumed = new Set();
+            for (const post of prev) {
+              const key = String(post.id);
+              const match = byRawId.get(key);
+              if (match) {
+                consumed.add(key);
+                out.push({
+                  ...match,
+                  id: post.id,
+                  ownerEmail: post.ownerEmail || match.ownerEmail,
+                  likedByMe: post.likedByMe,
+                });
+              } else {
+                out.push(post);
+              }
+            }
+            for (const p of serverP) {
+              if (!consumed.has(String(p.id))) out.push(p);
+            }
+            return out;
+          });
+        }
+      }
+    } catch (e) {
+      // Network/server unavailable — keep local-first data as-is.
+    }
+  };
+
+  useEffect(() => {
+    if (signedIn) syncFeeds(true);
+  }, [signedIn]);
+
+  useEffect(() => {
+    if ((activeTab === 'qa' || activeTab === 'community') && signedIn) {
+      syncFeeds(false);
+    }
+  }, [activeTab, signedIn]);
+
   // ---------- Community Handlers ----------
 
   const handleCreatePost = (media) => {
@@ -861,8 +1053,14 @@ export default function App() {
       // Register this post with the backend so comments/likes from other
       // users can be routed back to you as push notifications.
       if (account.email) {
-        notifyBackendCommunityPost(newPostId, account.email, account.fullName)
-          .catch(() => {});
+        notifyBackendCommunityPost(
+          newPostId,
+          account.email,
+          account.fullName,
+          newPostText,
+          media?.type || null,
+          media?.uri || null
+        ).catch(() => {});
       }
 
       // Notify the community about the new post
@@ -1045,7 +1243,7 @@ export default function App() {
           ))}
         </View>
 
-        {activeTab === 'prayer' && <PrayerTab styles={styles} t={t} nextPrayer={nextPrayer} times={times} diffHours={diffHours} diffMinutes={diffMinutes} diffSeconds={diffSeconds} locationName={customLocation ? `${customLocation.name} 📍` : city.name} locating={locating} locationError={locationError} onDetectLocation={handleDetectLocation} />}
+        {activeTab === 'prayer' && <PrayerTab styles={styles} t={t} nextPrayer={nextPrayer} times={times} diffHours={diffHours} diffMinutes={diffMinutes} diffSeconds={diffSeconds} locationName={customLocation ? `${customLocation.name} 📍` : city.name} locating={locating} locationError={locationError} onDetectLocation={handleDetectLocation} sourceLabel={prayerSourceLabel} />}
         {activeTab === 'qa' && (
           <QATab
             styles={styles}
@@ -1094,7 +1292,7 @@ export default function App() {
             handleDeleteComment={handleDeleteComment}
           />
         )}
-        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} />}
+        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} />}
       </View>
     </SafeAreaView>
   );

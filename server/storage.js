@@ -85,7 +85,13 @@ async function initStorage() {
     }
 
     // Cheap connectivity check before committing to this backend.
-    await db.collection('devices').limit(1).get();
+    // Bounded by a timeout so a slow/unreachable network can never hang
+    // startup before app.listen (the server would appear dead).
+    const probe = db.collection('devices').limit(1).get();
+    const probeTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Firestore probe timed out after 8s')), 8000)
+    );
+    await Promise.race([probe, probeTimeout]);
 
     mode = 'firestore';
     console.log('[storage] ✅ Connected to Firestore');
@@ -126,18 +132,30 @@ const memImpl = {
     return [...memDevices.entries()].map(([userId, d]) => ({ userId, ...d }));
   },
 
-  async createQAPost(ownerUserId, question) {
+  async createQAPost(ownerUserId, question, authorName) {
     const postId = String(memNextPostId++);
-    memPosts.set(postId, { ownerUserId });
+    memPosts.set(postId, {
+      ownerUserId,
+      question,
+      authorName: authorName || null,
+      likes: 0,
+      createdAt: new Date().toISOString(),
+    });
     return postId;
   },
   async getQAPost(postId) {
     const p = memPosts.get(String(postId));
     return p ? { ...p } : null;
   },
-  async addQAContribution(postId, userId, text) {
+  async addQAContribution(postId, userId, text, authorName) {
     const contributionId = String(memNextContribId++);
-    memContribs.set(`${postId}:${contributionId}`, { userId, likes: 0 });
+    memContribs.set(`${postId}:${contributionId}`, {
+      userId,
+      text,
+      authorName: authorName || null,
+      likes: 0,
+      createdAt: new Date().toISOString(),
+    });
     return contributionId;
   },
   async likeQAContribution(postId, contributionId) {
@@ -146,23 +164,62 @@ const memImpl = {
     c.likes += 1;
     return { likes: c.likes, userId: c.userId };
   },
+  async listQAPosts(limit = 50) {
+    const ids = [...memPosts.keys()].slice(-limit).reverse();
+    return ids.map((id) => {
+      const p = memPosts.get(id);
+      const contributions = [...memContribs.entries()]
+        .filter(([k]) => k.startsWith(`${id}:`))
+        .map(([k, c]) => ({ id: k.split(':')[1], ...c }))
+        .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
+      return { id, ...p, contributions };
+    });
+  },
 
-  async registerCommunityPost(postId, ownerUserId) {
-    memCommunity.set(String(postId), { ownerUserId, comments: new Map() });
+  async registerCommunityPost(postId, ownerUserId, meta = {}) {
+    memCommunity.set(String(postId), {
+      ownerUserId,
+      text: meta.text || '',
+      authorName: meta.authorName || null,
+      mediaType: meta.mediaType || null,
+      mediaUri: meta.mediaUri || null,
+      createdAt: meta.createdAt || new Date().toISOString(),
+      comments: new Map(),
+    });
   },
   async getCommunityPost(postId) {
     const p = memCommunity.get(String(postId));
     return p ? { ownerUserId: p.ownerUserId } : null;
   },
-  async setCommunityComment(postId, commentId, userId) {
+  async setCommunityComment(postId, commentId, userId, meta = {}) {
     const p = memCommunity.get(String(postId));
     if (!p) throw new Error('Post not found');
-    p.comments.set(String(commentId), { userId });
+    p.comments.set(String(commentId), {
+      userId,
+      text: meta.text || '',
+      authorName: meta.authorName || null,
+      createdAt: new Date().toISOString(),
+    });
   },
   async getCommunityComment(postId, commentId) {
     const p = memCommunity.get(String(postId));
     const c = p && p.comments.get(String(commentId));
     return c ? { ...c } : null;
+  },
+  async listCommunityPosts(limit = 50) {
+    return [...memCommunity.entries()]
+      .slice(-limit)
+      .reverse()
+      .map(([id, p]) => ({
+        id,
+        ownerUserId: p.ownerUserId,
+        text: p.text,
+        authorName: p.authorName,
+        mediaType: p.mediaType,
+        mediaUri: p.mediaUri,
+        createdAt: p.createdAt,
+        comments: [...p.comments.entries()].map(([cid, c]) => ({ id: cid, ...c })),
+      }));
   },
 
   async counts() {
@@ -187,20 +244,32 @@ const fsImpl = {
     return snap.docs.map((doc) => ({ userId: doc.id, ...doc.data() }));
   },
 
-  async createQAPost(ownerUserId, question) {
-    const ref = await db.collection('qaPosts').add({ ownerUserId, question });
+  async createQAPost(ownerUserId, question, authorName) {
+    const ref = await db.collection('qaPosts').add({
+      ownerUserId,
+      question,
+      authorName: authorName || null,
+      likes: 0,
+      createdAt: new Date().toISOString(),
+    });
     return ref.id;
   },
   async getQAPost(postId) {
     const snap = await db.collection('qaPosts').doc(String(postId)).get();
     return snap.exists ? snap.data() : null;
   },
-  async addQAContribution(postId, userId, text) {
+  async addQAContribution(postId, userId, text, authorName) {
     const ref = await db
       .collection('qaPosts')
       .doc(String(postId))
       .collection('contributions')
-      .add({ userId, text, likes: 0 });
+      .add({
+        userId,
+        text,
+        authorName: authorName || null,
+        likes: 0,
+        createdAt: new Date().toISOString(),
+      });
     return ref.id;
   },
   async likeQAContribution(postId, contributionId) {
@@ -218,23 +287,41 @@ const fsImpl = {
     });
   },
 
-  async registerCommunityPost(postId, ownerUserId) {
+  async registerCommunityPost(postId, ownerUserId, meta = {}) {
     await db
       .collection('communityPosts')
       .doc(String(postId))
-      .set({ ownerUserId }, { merge: true });
+      .set(
+        {
+          ownerUserId,
+          text: meta.text || '',
+          authorName: meta.authorName || null,
+          mediaType: meta.mediaType || null,
+          mediaUri: meta.mediaUri || null,
+          createdAt: meta.createdAt || new Date().toISOString(),
+        },
+        { merge: true }
+      );
   },
   async getCommunityPost(postId) {
     const snap = await db.collection('communityPosts').doc(String(postId)).get();
     return snap.exists ? snap.data() : null;
   },
-  async setCommunityComment(postId, commentId, userId) {
+  async setCommunityComment(postId, commentId, userId, meta = {}) {
     await db
       .collection('communityPosts')
       .doc(String(postId))
       .collection('comments')
       .doc(String(commentId))
-      .set({ userId }, { merge: true });
+      .set(
+        {
+          userId,
+          text: meta.text || '',
+          authorName: meta.authorName || null,
+          createdAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
   },
   async getCommunityComment(postId, commentId) {
     const snap = await db
@@ -244,6 +331,36 @@ const fsImpl = {
       .doc(String(commentId))
       .get();
     return snap.exists ? snap.data() : null;
+  },
+  async listQAPosts(limit = 50) {
+    const snap = await db
+      .collection('qaPosts')
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .get();
+    const out = [];
+    for (const doc of snap.docs) {
+      const cSnap = await doc.ref.collection('contributions').get();
+      const contributions = cSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
+      out.push({ id: doc.id, ...doc.data(), contributions });
+    }
+    return out;
+  },
+  async listCommunityPosts(limit = 50) {
+    const snap = await db
+      .collection('communityPosts')
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .get();
+    const out = [];
+    for (const doc of snap.docs) {
+      const cSnap = await doc.ref.collection('comments').get();
+      const comments = cSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      out.push({ id: doc.id, ...doc.data(), comments });
+    }
+    return out;
   },
 
   async counts() {
@@ -278,5 +395,7 @@ module.exports = {
   getCommunityPost: (...a) => impl().getCommunityPost(...a),
   setCommunityComment: (...a) => impl().setCommunityComment(...a),
   getCommunityComment: (...a) => impl().getCommunityComment(...a),
+  listQAPosts: (...a) => impl().listQAPosts(...a),
+  listCommunityPosts: (...a) => impl().listCommunityPosts(...a),
   counts: (...a) => impl().counts(...a),
 };
