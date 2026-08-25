@@ -8,9 +8,11 @@
       "developmentClient": true,
       "distribution": "internal"
     },
-    "preview": {
+                                    "preview": {
       "distribution": "internal",
-      "buildType": "apk"
+      "android": {
+        "gradleCommand": ":app:assembleRelease"
+      }
     },
     "production": {
       "autoIncrement": true
