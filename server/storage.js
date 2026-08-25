@@ -27,22 +27,39 @@ async function initStorage() {
   }
 
   try {
-    // Resolve against THIS module's directory so it works no matter what the
-    // process CWD is (handles both absolute and bare-relative values).
-    const keyPath = path.resolve(
-      __dirname,
-      process.env.GOOGLE_APPLICATION_CREDENTIALS || 'serviceAccountKey.json'
-    );
-
-    if (!fs.existsSync(keyPath)) {
-      throw new Error(`service account key not found at ${keyPath}`);
-    }
-
     const admin = require('firebase-admin');
 
-    // firebase-admin v13+ exports cert() at the top level; older versions
-    // nest it under admin.credential.cert(). Support both shapes.
-    const serviceAccount = require(keyPath);
+    // Support two ways of providing the service-account key so the server
+    // deploys cleanly to cloud hosts (Render/Heroku/etc.):
+    //
+    //   1. GOOGLE_APPLICATION_CREDENTIALS_JSON (base64) — recommended for
+    //      hosting. Set it to `base64 -w0 serviceAccountKey.json` on the host.
+    //      No secret file needs to be committed or mounted.
+    //   2. GOOGLE_APPLICATION_CREDENTIALS (file path) — original local-dev mode.
+    //
+    // If neither is present, Firestore is skipped and the in-memory backend is
+    // used instead (so the server still boots for quick tests).
+    let serviceAccount = null;
+
+    const b64 = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+    if (b64) {
+      // Decode base64 -> JSON object without writing any file to disk.
+      const json = Buffer.from(b64, 'base64').toString('utf8');
+      serviceAccount = JSON.parse(json);
+    } else {
+      // Resolve against THIS module's directory so it works no matter what the
+      // process CWD is (handles both absolute and bare-relative values).
+      const keyPath = path.resolve(
+        __dirname,
+        process.env.GOOGLE_APPLICATION_CREDENTIALS || 'serviceAccountKey.json'
+      );
+
+      if (!fs.existsSync(keyPath)) {
+        throw new Error(`service account key not found at ${keyPath}`);
+      }
+
+      serviceAccount = require(keyPath);
+    }
 
     // Common mix-up: an OAuth CLIENT secret file starts with "installed"/"web"
     // and has no project_id. Give an actionable hint instead of a cryptic error.

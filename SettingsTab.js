@@ -1,11 +1,94 @@
-import React from 'react';
-import { ScrollView, View, Text, Pressable, Switch, Linking } from 'react-native';
+import React, { useState } from 'react';
+import { ScrollView, View, Text, Pressable, Switch, TextInput, Modal, Alert, Linking } from 'react-native';
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './config.js';
 import { clearAccount, clearAllData } from './storage.js';
 
-const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, account, setSignedIn }) => {
+const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, account, setAccount, saveAccount, isGoogleUser, setSignedIn }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
+
+  // ---- Edit Profile / Change Email / Change Password modal state ----
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+
+  const [draftName, setDraftName] = useState('');
+  const [draftEmail, setDraftEmail] = useState('');
+  const [draftCurrentPassword, setDraftCurrentPassword] = useState('');
+  const [draftNewPassword, setDraftNewPassword] = useState('');
+  const [draftConfirmPassword, setDraftConfirmPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const openProfile = () => {
+    setDraftName(account.fullName || '');
+    setDraftEmail(account.email || '');
+    setErrorMsg('');
+    setProfileModalOpen(true);
+  };
+
+  const openEmail = () => {
+    setDraftEmail(account.email || '');
+    setErrorMsg('');
+    setEmailModalOpen(true);
+  };
+
+  const openPassword = () => {
+    setDraftCurrentPassword('');
+    setDraftNewPassword('');
+    setDraftConfirmPassword('');
+    setErrorMsg('');
+    setPasswordModalOpen(true);
+  };
+
+  const saveProfile = () => {
+    if (!draftName.trim()) {
+      setErrorMsg(getTranslation('enterYourName', 'Please enter a valid name.'));
+      return;
+    }
+    const email = draftEmail.trim();
+    if (!email || !email.includes('@')) {
+      setErrorMsg(getTranslation('enterYourEmail', 'Please enter a valid email address.'));
+      return;
+    }
+    const updated = { ...account, fullName: draftName.trim(), email };
+    setAccount(updated);
+    saveAccount(updated);
+    setProfileModalOpen(false);
+    Alert.alert(getTranslation('profileUpdated', 'Your profile has been updated successfully.'));
+  };
+
+  const saveEmail = () => {
+    const email = draftEmail.trim();
+    if (!email || !email.includes('@')) {
+      setErrorMsg(getTranslation('enterYourEmail', 'Please enter a valid email address.'));
+      return;
+    }
+    const updated = { ...account, email };
+    setAccount(updated);
+    saveAccount(updated);
+    setEmailModalOpen(false);
+    Alert.alert(getTranslation('emailUpdated', 'Your email address has been updated successfully.'));
+  };
+
+  const savePassword = () => {
+    if (!draftCurrentPassword || draftCurrentPassword !== (account.password || '')) {
+      setErrorMsg(getTranslation('currentPasswordWrong', 'The current password is incorrect.'));
+      return;
+    }
+    if (draftNewPassword.length < 6) {
+      setErrorMsg(getTranslation('passwordTooShort', 'Password must be at least 6 characters.'));
+      return;
+    }
+    if (draftNewPassword !== draftConfirmPassword) {
+      setErrorMsg(getTranslation('passwordMismatch', 'The new passwords do not match.'));
+      return;
+    }
+    const updated = { ...account, password: draftNewPassword };
+    setAccount(updated);
+    saveAccount(updated);
+    setPasswordModalOpen(false);
+    Alert.alert(getTranslation('passwordChanged', 'Your password has been updated successfully.'));
+  };
 
   const handleLogout = () => {
     clearAccount();
@@ -16,6 +99,14 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     // Clear all local data and sign out
     clearAllData();
     setSignedIn(false);
+  };
+
+  const handleChangeEmailPress = () => {
+    if (isGoogleUser) {
+      Alert.alert(getTranslation('changeEmailGoogle', 'Email cannot be changed because you signed in with Google.'));
+      return;
+    }
+    openEmail();
   };
 
   return (
@@ -91,9 +182,9 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
           </View>
           <Pressable onPress={handleLogout}><Text style={styles.logoutButtonText}>{getTranslation('logout', 'Logout')}</Text></Pressable>
         </View>
-        <Pressable style={styles.settingRow}><Text style={styles.settingRowText}>{getTranslation('editProfile', 'Edit Profile')}</Text><Text style={styles.arrow}>›</Text></Pressable>
-        <Pressable style={styles.settingRow}><Text style={styles.settingRowText}>{getTranslation('changeEmail', 'Change Email')}</Text><Text style={styles.arrow}>›</Text></Pressable>
-        <Pressable style={styles.settingRow}><Text style={styles.settingRowText}>{getTranslation('changePassword', 'Change Password')}</Text><Text style={styles.arrow}>›</Text></Pressable>
+        <Pressable style={styles.settingRow} onPress={openProfile}><Text style={styles.settingRowText}>{getTranslation('editProfile', 'Edit Profile')}</Text><Text style={styles.arrow}>›</Text></Pressable>
+        <Pressable style={styles.settingRow} onPress={handleChangeEmailPress}><Text style={styles.settingRowText}>{getTranslation('changeEmail', 'Change Email')}</Text><Text style={styles.arrow}>›</Text></Pressable>
+        <Pressable style={styles.settingRow} onPress={openPassword}><Text style={styles.settingRowText}>{getTranslation('changePassword', 'Change Password')}</Text><Text style={styles.arrow}>›</Text></Pressable>
       </View>
 
       {/* Privacy & Legal */}
@@ -121,6 +212,132 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
           <Text style={styles.arrow}>›</Text>
         </Pressable>
       </View>
+    {/* ---- Edit Profile Modal ---- */}
+      <Modal visible={profileModalOpen} transparent animationType="fade" onRequestClose={() => setProfileModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{getTranslation('editProfileTitle', 'Edit Profile')}</Text>
+            <Text style={styles.modalMessage}>{getTranslation('editProfileMessage', 'Update your account information below.')}</Text>
+
+            <Text style={styles.label}>{getTranslation('fullName', 'Full name')}</Text>
+            <TextInput
+              value={draftName}
+              onChangeText={setDraftName}
+              placeholder={getTranslation('yourNamePlaceholder', 'Your name')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            <Text style={styles.label}>{getTranslation('email', 'Email')}</Text>
+            <TextInput
+              value={draftEmail}
+              onChangeText={setDraftEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              placeholder={getTranslation('emailPlaceholder', 'example@email.com')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            {!!errorMsg && <Text style={styles.modalError}>{errorMsg}</Text>}
+
+            <View style={styles.modalButtonRow}>
+              <Pressable style={styles.modalCancelButton} onPress={() => setProfileModalOpen(false)}>
+                <Text style={styles.modalCancelButtonText}>{getTranslation('cancel', 'Cancel')}</Text>
+              </Pressable>
+              <Pressable style={styles.modalButton} onPress={saveProfile}>
+                <Text style={styles.modalButtonText}>{getTranslation('save', 'Save')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ---- Change Email Modal ---- */}
+      <Modal visible={emailModalOpen} transparent animationType="fade" onRequestClose={() => setEmailModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{getTranslation('changeEmailTitle', 'Change Email')}</Text>
+            <Text style={styles.modalMessage}>{getTranslation('changeEmailMessage', 'Enter your new email address.')}</Text>
+
+            <Text style={styles.label}>{getTranslation('newEmail', 'New Email')}</Text>
+            <TextInput
+              value={draftEmail}
+              onChangeText={setDraftEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              placeholder={getTranslation('newEmailPlaceholder', 'new@email.com')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            {!!errorMsg && <Text style={styles.modalError}>{errorMsg}</Text>}
+
+            <View style={styles.modalButtonRow}>
+              <Pressable style={styles.modalCancelButton} onPress={() => setEmailModalOpen(false)}>
+                <Text style={styles.modalCancelButtonText}>{getTranslation('cancel', 'Cancel')}</Text>
+              </Pressable>
+              <Pressable style={styles.modalButton} onPress={saveEmail}>
+                <Text style={styles.modalButtonText}>{getTranslation('save', 'Save')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ---- Change Password Modal ---- */}
+      <Modal visible={passwordModalOpen} transparent animationType="fade" onRequestClose={() => setPasswordModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{getTranslation('changePasswordTitle', 'Change Password')}</Text>
+            <Text style={styles.modalMessage}>{getTranslation('changePasswordMessage', 'For security, enter your current password, then create your new password.')}</Text>
+
+            <Text style={styles.label}>{getTranslation('currentPassword', 'Current Password')}</Text>
+            <TextInput
+              value={draftCurrentPassword}
+              onChangeText={setDraftCurrentPassword}
+              secureTextEntry
+              placeholder={getTranslation('passwordLogin', 'Your password')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            <Text style={styles.label}>{getTranslation('newPassword', 'New Password')}</Text>
+            <TextInput
+              value={draftNewPassword}
+              onChangeText={setDraftNewPassword}
+              secureTextEntry
+              placeholder={getTranslation('passwordSignUp', 'Create password')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            <Text style={styles.label}>{getTranslation('confirmNewPassword', 'Confirm New Password')}</Text>
+            <TextInput
+              value={draftConfirmPassword}
+              onChangeText={setDraftConfirmPassword}
+              secureTextEntry
+              placeholder={getTranslation('confirmNewPassword', 'Confirm New Password')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+
+            <Text style={styles.passwordRequirement}>{getTranslation('passwordTooShort', 'Password must be at least 6 characters.')}</Text>
+
+            {!!errorMsg && <Text style={styles.modalError}>{errorMsg}</Text>}
+
+            <View style={styles.modalButtonRow}>
+              <Pressable style={styles.modalCancelButton} onPress={() => setPasswordModalOpen(false)}>
+                <Text style={styles.modalCancelButtonText}>{getTranslation('cancel', 'Cancel')}</Text>
+              </Pressable>
+              <Pressable style={styles.modalButton} onPress={savePassword}>
+                <Text style={styles.modalButtonText}>{getTranslation('save', 'Save')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </ScrollView>
   );
 };

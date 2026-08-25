@@ -1,0 +1,35 @@
+# Render Blueprint — free-tier Web Service for the İslamı öğreniyorum backend.
+#
+# How to use:
+#   1) Push this repo (including this file) to GitHub.
+#   2) In Render: "New" → "Blueprint" → pick the repo → Render auto-detects this
+#      file (rootDir: server) and creates the web service.
+#   3) Fill in the secret env vars (EXPO_ACCESS_TOKEN, GEMINI_API_KEY,
+#      GOOGLE_APPLICATION_CREDENTIALS_JSON) in the service's Environment dashboard.
+services:
+  - type: web
+    name: islami-ogreniyorum-server
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      # Public, non-secret configuration:
+      - key: USE_FIRESTORE
+        value: "true"
+      # Secrets — set each of these in the Render dashboard (Environment tab).
+      # GOOGLE_APPLICATION_CREDENTIALS_JSON = base64 of server/serviceAccountKey.json
+      #   (Windows:  certutil -encode serviceAccountKey.json out.b64  → remove the
+      #    BEGIN/END header lines and newlines; or use any base64 encoder).
+      #   Linux/macOS:  base64 -w0 serviceAccountKey.json
+      - key: EXPO_ACCESS_TOKEN
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_CX
+        sync: false

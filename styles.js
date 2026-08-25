@@ -1100,6 +1100,75 @@ export function makeStyles(palette) {
       fontSize: 18,
     },
 
+    // ---------- Settings Modals ----------
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.55)',
+      justifyContent: 'center',
+      padding: 20,
+    },
+    modalCard: {
+      backgroundColor: palette.card,
+      borderRadius: 14,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: palette.border,
+      width: '100%',
+    },
+    modalTitle: {
+      color: palette.text,
+      fontSize: 17,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    modalMessage: {
+      color: palette.muted,
+      fontSize: 13,
+      marginBottom: 16,
+      lineHeight: 20,
+    },
+    modalButtonRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 8,
+    },
+    modalButton: {
+      flex: 1,
+      backgroundColor: palette.primary,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    modalButtonText: {
+      color: '#08131a',
+      fontSize: 15,
+      fontWeight: '700',
+    },
+    modalCancelButton: {
+      flex: 1,
+      backgroundColor: palette.panel,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    modalCancelButtonText: {
+      color: palette.text,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    modalError: {
+      color: '#e05d5d',
+      fontSize: 13,
+      marginBottom: 10,
+    },
+    passwordRequirement: {
+      color: palette.muted,
+      fontSize: 12,
+      marginBottom: 10,
+    },
+
     // ---------- Profile Setup ----------
     setupCard: {
       backgroundColor: palette.card,
