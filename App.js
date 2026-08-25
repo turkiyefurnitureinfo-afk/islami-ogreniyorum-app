@@ -481,7 +481,7 @@ export default function App() {
         .then((result) => {
           if (result && result.ok && result.postId) {
             setQAndA(prev => prev.map(q => (
-              q.id === questionId ? { ...q, serverPostId: result.postId } : q
+              q.id === newQ.id ? { ...q, serverPostId: result.postId } : q
             )));
           }
         })
@@ -656,7 +656,7 @@ export default function App() {
                   ? {
                       ...q,
                       answers: q.answers.map(a => (
-                        a.id === answerId ? { ...a, serverContribId: result.contributionId } : a
+                        a.id === newAns.id ? { ...a, serverContribId: result.contributionId } : a
                       )),
                     }
                   : q
