@@ -1,9 +1,13 @@
 # Render Blueprint — free-tier Web Service for the İslamı öğreniyorum backend.
 #
+# Render auto-detects THIS file only when it lives at the repository ROOT.
+# The backend source is in the `server/` subfolder, so the service uses
+# rootDir: server (Render sets the working directory there before build/start).
+#
 # How to use:
 #   1) Push this repo (including this file) to GitHub.
 #   2) In Render: "New" → "Blueprint" → pick the repo → Render auto-detects this
-#      file (rootDir: server) and creates the web service.
+#      file and creates the web service.
 #   3) Fill in the secret env vars (EXPO_ACCESS_TOKEN, GEMINI_API_KEY,
 #      GOOGLE_APPLICATION_CREDENTIALS_JSON) in the service's Environment dashboard.
 services:
