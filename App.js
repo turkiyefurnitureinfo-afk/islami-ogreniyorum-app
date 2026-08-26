@@ -486,11 +486,21 @@ export default function App() {
       if (!account.email.trim() || !account.password.trim()) {
         return;
       }
-      // For login, verify password against stored hash
+                  // For login, verify password against stored hash
       const savedAccount = await loadAccount();
       if (savedAccount && savedAccount.email === account.email) {
         const isValid = await verifyPassword(account.password, savedAccount.password);
         if (!isValid) {
+          // Migration fallback: auto-upgrade legacy plaintext passwords
+          if (savedAccount.password === account.password) {
+            const hashed = await hashPassword(account.password);
+            const upgraded = { ...savedAccount, password: hashed };
+            setAccount(upgraded);
+            saveAccount(upgraded);
+            setSignedIn(true);
+            registerDeviceWithBackend(upgraded.email, upgraded.fullName);
+            return;
+          }
           Alert.alert(t.invalidLogin || 'Invalid credentials', t.wrongPasswordOrEmail || 'Wrong email or password');
           return;
         }
