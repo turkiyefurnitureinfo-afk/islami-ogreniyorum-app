@@ -1,4 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import bcrypt from 'bcryptjs';
+
+// Number of bcrypt rounds (balances security vs login speed on mobile)
+const BCRYPT_ROUNDS = 10;
+
+/**
+ * Hash a plaintext password before storage.
+ * Google / magic-link users pass null — returned as-is.
+ */
+export async function hashPassword(password) {
+  if (!password) return null;
+  return await bcrypt.hash(password, BCRYPT_ROUNDS);
+}
+
+/**
+ * Verify a plaintext password against the stored hash.
+ * Returns false if either value is empty.
+ */
+export async function verifyPassword(password, hash) {
+  if (!password || !hash) return false;
+  return await bcrypt.compare(password, hash);
+}
 
 // Storage keys
 const KEYS = {

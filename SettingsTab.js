@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ScrollView, View, Text, Pressable, Switch, TextInput, Modal, Alert, Linking } from 'react-native';
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './config.js';
-import { clearAccount, clearAllData } from './storage.js';
+import { clearAccount, clearAllData, verifyPassword, hashPassword } from './storage.js';
 
 const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, saveAccount, isGoogleUser, setSignedIn }) => {
   // Helper function to safely get translations with a fallback
@@ -80,8 +80,19 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     Alert.alert(getTranslation('emailUpdated', 'Your email address has been updated successfully.'));
   };
 
-  const savePassword = () => {
-    if (!draftCurrentPassword || draftCurrentPassword !== (account.password || '')) {
+    const savePassword = async () => {
+    // For Google users, there's no password to verify
+    if (isGoogleUser) {
+      setErrorMsg(getTranslation('passwordNotAvailableForGoogle', 'Password changes are not available for Google accounts.'));
+      return;
+    }
+    // Verify current password using bcrypt
+    if (!draftCurrentPassword) {
+      setErrorMsg(getTranslation('currentPasswordWrong', 'The current password is incorrect.'));
+      return;
+    }
+    const isCurrentValid = await verifyPassword(draftCurrentPassword, account.password);
+    if (!isCurrentValid) {
       setErrorMsg(getTranslation('currentPasswordWrong', 'The current password is incorrect.'));
       return;
     }
@@ -93,7 +104,9 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       setErrorMsg(getTranslation('passwordMismatch', 'The new passwords do not match.'));
       return;
     }
-    const updated = { ...account, password: draftNewPassword };
+    // Hash the new password before storing
+    const hashedNewPassword = await hashPassword(draftNewPassword);
+    const updated = { ...account, password: hashedNewPassword };
     setAccount(updated);
     saveAccount(updated);
     setPasswordModalOpen(false);

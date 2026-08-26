@@ -170,6 +170,9 @@ export const translations = {
     deletePostConfirm: 'Bu gönderiyi silmek istiyor musunuz?',
     deleteCommentConfirm: 'Bu yorumu silmek istiyor musunuz?',
     deleted: 'Silindi',
+    deleted: 'Silindi',
+    passwordNotAvailableForGoogle: 'Google hesabınız kullandığınız için şifre değişikliği yapılamaz.',
+    // Prayer calculation method
     // Prayer calculation method
     calculationMethod: 'Hesaplama Yöntemi',
     methodDiyanet: 'Diyanet',
@@ -355,7 +358,8 @@ export const translations = {
     deleteAnswerConfirm: 'Delete this answer?',
     deletePostConfirm: 'Delete this post?',
     deleteCommentConfirm: 'Delete this comment?',
-    deleted: 'Deleted',
+        deleted: 'Deleted',
+    passwordNotAvailableForGoogle: 'Password changes are not available for Google accounts.',
     // Prayer calculation method
     calculationMethod: 'Calculation Method',
     methodDiyanet: 'Diyanet',

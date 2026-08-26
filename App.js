@@ -57,6 +57,8 @@ import {
   saveCommunityPosts,
   loadCommunityPosts,
   clearAllData,
+  hashPassword,
+  verifyPassword,
 } from './storage.js';
 import PrayerTab from './PrayerTab.js';
 import QATab from './QATab.js';
@@ -464,23 +466,45 @@ export default function App() {
 
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
-  const handleAuthAction = () => {
+    const handleAuthAction = async () => {
     if (authMode === 'signup') {
       setIsNewUser(true);
       if (!account.fullName.trim() || !account.email.trim() || !account.password.trim()) {
         return;
       }
+      // Hash the password before storing
+      const hashedPassword = await hashPassword(account.password);
+      const accountToSave = { ...account, password: hashedPassword };
+      setAccount(accountToSave);
+      setSignedIn(true);
+      saveAccount(accountToSave);
+
+      // Register this device with the push notification backend
+      registerDeviceWithBackend(account.email, account.fullName);
     } else {
       setIsNewUser(false);
       if (!account.email.trim() || !account.password.trim()) {
         return;
       }
+      // For login, verify password against stored hash
+      const savedAccount = await loadAccount();
+      if (savedAccount && savedAccount.email === account.email) {
+        const isValid = await verifyPassword(account.password, savedAccount.password);
+        if (!isValid) {
+          Alert.alert(t.invalidLogin || 'Invalid credentials', t.wrongPasswordOrEmail || 'Wrong email or password');
+          return;
+        }
+        // Login successful
+        setAccount(savedAccount);
+        setSignedIn(true);
+        registerDeviceWithBackend(savedAccount.email, savedAccount.fullName);
+      } else {
+        // No saved account, allow login with just email/password (first-time local login)
+        setSignedIn(true);
+        saveAccount(account);
+        registerDeviceWithBackend(account.email, account.fullName);
+      }
     }
-    setSignedIn(true);
-    saveAccount(account);
-
-    // Register this device with the push notification backend
-    registerDeviceWithBackend(account.email, account.fullName);
   };
 
   const handleGoogleSignIn = async () => {
