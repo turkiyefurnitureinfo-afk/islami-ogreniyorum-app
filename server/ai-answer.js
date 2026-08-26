@@ -155,8 +155,31 @@ async function getGoogleAnswer(question, language) {
  * @returns {Promise<{answer: string, source?: string, href?: string, provider: 'google'|'builtin'}>}
  */
 async function getAIAnswer(question, language = 'tr') {
+  // Input validation and sanitization
+  if (!question || typeof question !== 'string') {
+    throw new Error('Question must be a non-empty string');
+  }
+  
+  // Validate language parameter
+  const validLanguages = ['tr', 'en'];
+  if (!validLanguages.includes(language)) {
+    language = 'tr'; // default to Turkish
+  }
+  
+  const sanitizedQuestion = question.trim();
+  if (sanitizedQuestion.length < 2) {
+    throw new Error('Question is too short');
+  }
+
   // Priority 1: Google Gemini (free-tier generative AI, best quality)
-  const geminiAnswer = await getGeminiAnswer(question, language);
+  let geminiAnswer = null;
+  try {
+    geminiAnswer = await getGeminiAnswer(sanitizedQuestion, language);
+  } catch (error) {
+    console.error('[getAIAnswer] Gemini failed:', error.message);
+    // Continue to Google fallback
+  }
+
   if (geminiAnswer) {
     return {
       answer: geminiAnswer.answer,
@@ -165,7 +188,14 @@ async function getAIAnswer(question, language = 'tr') {
   }
 
   // Priority 2: Google Custom Search (real, sourced results)
-  const googleAnswer = await getGoogleAnswer(question, language);
+  let googleAnswer = null;
+  try {
+    googleAnswer = await getGoogleAnswer(sanitizedQuestion, language);
+  } catch (error) {
+    console.error('[getAIAnswer] Google search failed:', error.message);
+    // Continue to built-in fallback
+  }
+
   if (googleAnswer) {
     return {
       answer: googleAnswer.answer,
@@ -177,7 +207,7 @@ async function getAIAnswer(question, language = 'tr') {
 
   // Priority 3: offline knowledge engine
   return {
-    answer: builtInAnswer(question, language),
+    answer: builtInAnswer(sanitizedQuestion, language),
     provider: 'builtin',
   };
 }
