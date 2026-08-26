@@ -107,6 +107,13 @@ export default function App() {
   const [profilePicture, setProfilePicture] = useState('');
   const [isGoogleUser, setIsGoogleUser] = useState(false);
 
+  // Compare content ids safely whether they are numeric (local Date.now()) or
+  // strings (server / 'srv-...' prefixed ids).
+  const sameId = (a, b) => String(a ?? '') === String(b ?? '');
+  // Server-post IDs the user deleted. Empty items mean "already gone" so a
+  // refresh can never resurrect content they intentionally removed.
+  const deletedServerIdsRef = React.useRef(new Set());
+
   // Q&A state
   const [qAndA, setQAndA] = useState(Q_AND_A.tr);
   const [newQuestion, setNewQuestion] = useState('');
@@ -453,15 +460,34 @@ export default function App() {
   const projectEvents = PROJECT_EVENTS[language];
   const soundOptions = SOUND_OPTIONS[language];
 
+  // True when a list holds any real user/community content (an owned item or a
+  // server-synced item). Used to decide whether a language change should drop
+  // back to bundled sample data or preserve the user's feed.
+  const hasRealContent = (list) =>
+    Array.isArray(list) &&
+    list.some((item) => item.ownerEmail || item.serverPostId || item.serverId);
+
   useEffect(() => {
-    setQAndA(Q_AND_A[language]);
-    setCommunityPosts(COMMUNITY_POSTS[language]);
+    // Only reset transient UI state on a language change; NEVER clobber the
+    // user's real + synced content with the bundled sample data (that caused
+    // silent data loss every time the language was toggled).
     setExpandedQas({});
     setNewQuestion('');
     setNewAnswer({});
     setAnswerFormOpen({});
     setNewPostText('');
     setNewComment({});
+  }, [language]);
+
+  // Seed the QA list with the language-appropriate sample content ONLY when the
+  // user has no real content yet (fresh install / no saved posts).
+  useEffect(() => {
+    if (qAndA.length === 0 && !hasRealContent(qAndA)) {
+      setQAndA(Q_AND_A[language]);
+    }
+    if (communityPosts.length === 0 && !hasRealContent(communityPosts)) {
+      setCommunityPosts(COMMUNITY_POSTS[language]);
+    }
   }, [language]);
 
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -584,7 +610,7 @@ export default function App() {
         .then((result) => {
           if (result && result.ok && result.postId) {
             setQAndA(prev => prev.map(q => (
-              q.id === newQ.id ? { ...q, serverPostId: result.postId } : q
+              sameId(q.id, newQ.id) ? { ...q, serverPostId: result.postId } : q
             )));
           }
         })
@@ -594,7 +620,7 @@ export default function App() {
 
   const handleLikeQuestion = (questionId) => {
     setQAndA(prev => prev.map(q => {
-      if (q.id === questionId) {
+      if (sameId(q.id, questionId)) {
         return {
           ...q,
           likes: q.likedByMe ? q.likes - 1 : q.likes + 1,
@@ -607,16 +633,16 @@ export default function App() {
 
   const handleLikeAnswer = (questionId, answerId) => {
     // Read current state before toggling so we only notify on a fresh like.
-    const likedQuestion = qAndA.find(x => x.id === questionId);
-    const likedAnswer = likedQuestion?.answers.find(a => a.id === answerId);
+    const likedQuestion = qAndA.find(x => sameId(x.id, questionId));
+    const likedAnswer = likedQuestion?.answers.find(a => sameId(a.id, answerId));
     const willLike = !!likedAnswer && !likedAnswer.likedByMe;
 
     setQAndA(prev => prev.map(q => {
-      if (q.id === questionId) {
+      if (sameId(q.id, questionId)) {
         return {
           ...q,
           answers: q.answers.map(a => {
-            if (a.id === answerId) {
+            if (sameId(a.id, answerId)) {
               return {
                 ...a,
                 likes: a.likedByMe ? a.likes - 1 : a.likes + 1,
@@ -662,11 +688,11 @@ export default function App() {
 
   // AI: generate an answer for a Q&A question via the backend
   const handleAIAnswer = async (questionId) => {
-    const question = qAndA.find(q => q.id === questionId);
+    const question = qAndA.find(q => sameId(q.id, questionId));
     if (!question || question.aiAnswerLoading) return;
 
     // Mark this question as loading
-    setQAndA(prev => prev.map(q => q.id === questionId ? { ...q, aiAnswerLoading: true, aiError: undefined } : q));
+    setQAndA(prev => prev.map(q => sameId(q.id, questionId) ? { ...q, aiAnswerLoading: true, aiError: undefined } : q));
 
     try {
       const response = await fetch(`${API_URL}/api/ai/answer`, {
@@ -696,7 +722,7 @@ export default function App() {
       };
 
       setQAndA(prev => prev.map(q => {
-        if (q.id === questionId) {
+        if (sameId(q.id, questionId)) {
           return {
             ...q,
             aiAnswerLoading: false,
@@ -708,7 +734,7 @@ export default function App() {
       }));
     } catch (error) {
       console.error('AI answer error:', error);
-      setQAndA(prev => prev.map(q => q.id === questionId
+      setQAndA(prev => prev.map(q => sameId(q.id, questionId)
         ? {
             ...q,
             aiAnswerLoading: false,
@@ -736,7 +762,7 @@ export default function App() {
         ownerEmail: account.email || null,
       };
       setQAndA(prev => prev.map(q => {
-        if (q.id === questionId) {
+        if (sameId(q.id, questionId)) {
           return { ...q, answers: [...q.answers, newAns] };
         }
         return q;
@@ -746,7 +772,7 @@ export default function App() {
 
       // Notify the question's author via the backend. Only possible when this
       // question was registered server-side (it has a serverPostId).
-      const answeredQuestion = qAndA.find(q => q.id === questionId);
+      const answeredQuestion = qAndA.find(q => sameId(q.id, questionId));
       if (answeredQuestion?.serverPostId) {
         notifyBackendNewContribution(
           answeredQuestion.serverPostId,
@@ -759,11 +785,11 @@ export default function App() {
               // Remember the server contribution ID so later likes on this
               // answer can notify its author.
               setQAndA(prev => prev.map(q => (
-                q.id === questionId
+                sameId(q.id, questionId)
                   ? {
                       ...q,
                       answers: q.answers.map(a => (
-                        a.id === newAns.id ? { ...a, serverContribId: result.contributionId } : a
+                        sameId(a.id, newAns.id) ? { ...a, serverContribId: result.contributionId } : a
                       )),
                     }
                   : q
@@ -798,7 +824,7 @@ export default function App() {
     const text = (newText || '').trim();
     if (!text) return;
     setQAndA(prev => prev.map(q => (
-      q.id === questionId && isOwnContent(q.ownerEmail)
+      sameId(q.id, questionId) && isOwnContent(q.ownerEmail)
         ? { ...q, question: text }
         : q
     )));
@@ -813,9 +839,17 @@ export default function App() {
         {
           text: t.delete || 'Delete',
           style: 'destructive',
-          onPress: () => setQAndA(prev => prev.filter(q => !(
-            q.id === questionId && isOwnContent(q.ownerEmail)
-          ))),
+          onPress: () => {
+            setQAndA(prev => prev.filter(q => !(
+              sameId(q.id, questionId) && isOwnContent(q.ownerEmail)
+            )));
+            // Remember server-synced questions I delete so a refresh won't
+            // bring them back.
+            const target = qAndA.find(q => sameId(q.id, questionId) && isOwnContent(q.ownerEmail));
+            if (target && target.serverPostId) {
+              deletedServerIdsRef.current.add(`qa:${target.serverPostId}`);
+            }
+          },
         },
       ]
     );
@@ -825,11 +859,11 @@ export default function App() {
     const text = (newText || '').trim();
     if (!text) return;
     setQAndA(prev => prev.map(q => (
-      q.id === questionId
+      sameId(q.id, questionId)
         ? {
             ...q,
             answers: q.answers.map(a => (
-              a.id === answerId && isOwnContent(a.ownerEmail) ? { ...a, text } : a
+              sameId(a.id, answerId) && isOwnContent(a.ownerEmail) ? { ...a, text } : a
             )),
           }
         : q
@@ -846,9 +880,9 @@ export default function App() {
           text: t.delete || 'Delete',
           style: 'destructive',
           onPress: () => setQAndA(prev => prev.map(q => (
-            q.id === questionId
+            sameId(q.id, questionId)
               ? { ...q, answers: q.answers.filter(a => !(
-                  a.id === answerId && isOwnContent(a.ownerEmail)
+                  sameId(a.id, answerId) && isOwnContent(a.ownerEmail)
                 )) }
               : q
           ))),
@@ -862,7 +896,7 @@ export default function App() {
     const text = (newText || '').trim();
     if (!text) return;
     setCommunityPosts(prev => prev.map(p => (
-      p.id === postId && isOwnContent(p.ownerEmail) ? { ...p, text } : p
+      sameId(p.id, postId) && isOwnContent(p.ownerEmail) ? { ...p, text } : p
     )));
   };
 
@@ -875,9 +909,17 @@ export default function App() {
         {
           text: t.delete || 'Delete',
           style: 'destructive',
-          onPress: () => setCommunityPosts(prev => prev.filter(p => !(
-            p.id === postId && isOwnContent(p.ownerEmail)
-          ))),
+          onPress: () => {
+            setCommunityPosts(prev => prev.filter(p => !(
+              sameId(p.id, postId) && isOwnContent(p.ownerEmail)
+            )));
+            // If it's a server-synced post I own, remember it as deleted so a
+            // future feed refresh never resurrects it.
+            const target = communityPosts.find(p => sameId(p.id, postId) && isOwnContent(p.ownerEmail));
+            if (target && target.serverId) {
+              deletedServerIdsRef.current.add(`post:${target.serverId}`);
+            }
+          },
         },
       ]
     );
@@ -887,11 +929,11 @@ export default function App() {
     const text = (newText || '').trim();
     if (!text) return;
     setCommunityPosts(prev => prev.map(p => (
-      p.id === postId
+      sameId(p.id, postId)
         ? {
             ...p,
             comments: p.comments.map(c => (
-              c.id === commentId && isOwnContent(c.commenterEmail) ? { ...c, text } : c
+              sameId(c.id, commentId) && isOwnContent(c.commenterEmail) ? { ...c, text } : c
             )),
           }
         : p
@@ -908,9 +950,9 @@ export default function App() {
           text: t.delete || 'Delete',
           style: 'destructive',
           onPress: () => setCommunityPosts(prev => prev.map(p => (
-            p.id === postId
+            sameId(p.id, postId)
               ? { ...p, comments: p.comments.filter(c => !(
-                  c.id === commentId && isOwnContent(c.commenterEmail)
+                  sameId(c.id, commentId) && isOwnContent(c.commenterEmail)
                 )) }
               : p
           ))),
@@ -956,6 +998,7 @@ export default function App() {
       // Firestore doc id == the author's original local numeric post id, so
       // comment/like routing keeps working on other devices.
       id: doc.id,
+      serverId: doc.id,
       user: { name: doc.authorName || '👤', avatar: '👤' },
       ownerEmail: doc.ownerUserId || null,
       text: doc.text || '',
@@ -994,7 +1037,11 @@ export default function App() {
         const data = await qaRes.json().catch(() => null);
         if (data && Array.isArray(data.items)) {
           const serverQ = data.items.map(normalizeServerQA);
-          const serverById = new Map(serverQ.map((q) => [q.serverPostId, q]));
+          // Exclude items the current user deleted (tombstone) so a refresh
+          // never resurrects them.
+          const deleted = deletedServerIdsRef.current;
+          const filteredQ = serverQ.filter((q) => !deleted.has('qa:' + q.serverPostId));
+          const serverById = new Map(filteredQ.map((q) => [q.serverPostId, q]));
           setQAndA((prev) => {
             const out = [];
             for (const item of prev) {
@@ -1025,7 +1072,10 @@ export default function App() {
         const data = await commRes.json().catch(() => null);
         if (data && Array.isArray(data.items)) {
           const serverP = data.items.map(normalizeServerCommunityPost);
-          const byRawId = new Map(serverP.map((p) => [String(p.id), p]));
+          // Exclude posts the current user deleted (tombstone).
+          const deleted = deletedServerIdsRef.current;
+          const filteredP = serverP.filter((p) => !deleted.has('post:' + String(p.serverId)));
+          const byRawId = new Map(filteredP.map((p) => [String(p.id), p]));
           setCommunityPosts((prev) => {
             const out = [];
             const consumed = new Set();
@@ -1172,11 +1222,11 @@ export default function App() {
 
   const handleLikePost = (postId) => {
     // Read current state before toggling so we only notify on a fresh like.
-    const targetPost = communityPosts.find(p => p.id === postId);
+    const targetPost = communityPosts.find(p => sameId(p.id, postId));
     const willLike = !!targetPost && !targetPost.likedByMe;
 
     setCommunityPosts(prevPosts => prevPosts.map(p => {
-      if (p.id === postId) {
+      if (sameId(p.id, postId)) {
         return {
           ...p,
           likes: p.likedByMe ? p.likes - 1 : p.likes + 1,
@@ -1200,16 +1250,16 @@ export default function App() {
 
   const handleLikeComment = (postId, commentId) => {
     // Read current state before toggling so we only notify on a fresh like.
-    const parentPost = communityPosts.find(p => p.id === postId);
-    const targetComment = parentPost?.comments.find(c => c.id === commentId);
+    const parentPost = communityPosts.find(p => sameId(p.id, postId));
+    const targetComment = parentPost?.comments.find(c => sameId(c.id, commentId));
     const willLike = !!targetComment && !targetComment.likedByMe;
 
     setCommunityPosts(prevPosts => prevPosts.map(p => {
-      if (p.id === postId) {
+      if (sameId(p.id, postId)) {
         return {
           ...p,
           comments: p.comments.map(c => {
-            if (c.id === commentId) {
+            if (sameId(c.id, commentId)) {
               return {
                 ...c,
                 likes: c.likedByMe ? c.likes - 1 : c.likes + 1,
@@ -1252,7 +1302,7 @@ export default function App() {
         likedByMe: false,
       };
       setCommunityPosts(prevPosts => prevPosts.map(p => {
-        if (p.id === postId) {
+        if (sameId(p.id, postId)) {
           return { ...p, comments: [...p.comments, newCommentObj] };
         }
         return p;
@@ -1261,7 +1311,7 @@ export default function App() {
 
       // Notify the post's author via the backend (only for posts by another
       // signed-in user; seeded demo posts have no owner to notify).
-      const commentedPost = communityPosts.find(p => p.id === postId);
+      const commentedPost = communityPosts.find(p => sameId(p.id, postId));
       if (
         commentedPost?.ownerEmail &&
         account.email &&
