@@ -20,6 +20,11 @@ dist/
 *.log
 server/build-log.txt
 
+# Native projects are generated fresh by EAS (continuous native generation)
+# on every build. Keeping them out of git avoids stale native config that
+# breaks cloud Gradle builds when node_modules versions change.
+android/
+ios/
 # Scratch run logs
 server/t-out.txt
 server/t-err.txt
