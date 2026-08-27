@@ -181,6 +181,10 @@ export default function App() {
     })();
   }, []);
 
+  // Translation table for the current language. Declared before the effects
+  // below so their dependency arrays never reference it ahead of definition.
+  const t = translations[language];
+
   // Auto-detect the user's REAL location anywhere in the world so prayer times
   // and event times match where they are (not just the preset cities). Runs
   // once the user is signed in; gracefully falls back to a default city when
@@ -265,7 +269,6 @@ export default function App() {
   }, [hydrated, communityPosts]);
 
   const city = customLocation || CITIES[cityKey];
-  const t = translations[language];
   // Use live news from the backend when available, otherwise fall back to static data.
   const newsItems = (liveNews && liveNews.length > 0 ? liveNews : NEWS_ITEMS[language]);
   const scholarVideos = liveScholarVideos && liveScholarVideos.length > 0 ? liveScholarVideos : SCHOLAR_VIDEOS_FALLBACK;
@@ -1123,7 +1126,8 @@ export default function App() {
   // server-side; blocking hides an author's content locally.
 
   const handleReportContent = ({ contentType, contentId, authorEmail }) => {
-    const actions = [
+    /** @type {import('react-native').AlertButton[]} */
+  const actions = [
       {
         text: t.blockUser || 'Block user',
         style: 'destructive',

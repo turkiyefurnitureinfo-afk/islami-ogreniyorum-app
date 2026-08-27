@@ -86,9 +86,10 @@ async function buildLocation() {
 export async function detectLocation() {
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') {
-    const err = new Error('PERMISSION_DENIED');
-    err.code = 'PERMISSION_DENIED';
-    throw err;
+    // Attach a machine-readable reason for callers (App checks `e.code`).
+    throw Object.assign(new Error('PERMISSION_DENIED'), {
+      code: 'PERMISSION_DENIED',
+    });
   }
   return buildLocation();
 }

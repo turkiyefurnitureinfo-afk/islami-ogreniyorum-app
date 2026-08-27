@@ -159,8 +159,6 @@ export const translations = {
     // Edit / Delete content
     edit: 'Düzenle',
     delete: 'Sil',
-    save: 'Kaydet',
-    cancel: 'İptal',
     editYourQuestion: 'Sorunuzu düzenleyin',
     editYourAnswer: 'Cevabınızı düzenleyin',
     editYourPost: 'Gönderinizi düzenleyin',
@@ -169,7 +167,6 @@ export const translations = {
     deleteAnswerConfirm: 'Bu cevabı silmek istiyor musunuz?',
     deletePostConfirm: 'Bu gönderiyi silmek istiyor musunuz?',
     deleteCommentConfirm: 'Bu yorumu silmek istiyor musunuz?',
-    deleted: 'Silindi',
     deleted: 'Silindi',
     passwordNotAvailableForGoogle: 'Google hesabınız kullandığınız için şifre değişikliği yapılamaz.',
     // Prayer calculation method
@@ -348,8 +345,6 @@ export const translations = {
     // Edit / Delete content
     edit: 'Edit',
     delete: 'Delete',
-    save: 'Save',
-    cancel: 'Cancel',
     editYourQuestion: 'Edit your question',
     editYourAnswer: 'Edit your answer',
     editYourPost: 'Edit your post',

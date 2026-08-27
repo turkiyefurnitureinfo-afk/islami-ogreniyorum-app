@@ -6,7 +6,11 @@ import { API_URL } from './config.js';
 // Configure how notifications are presented while the app is in the foreground
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    // SDK 53: shouldShowAlert is the legacy flag kept for compatibility;
+    // banner/list flags are the modern equivalents with identical meaning.
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -245,7 +249,9 @@ export async function cancelPrayerChain(chainId) {
 export function registerPrayerAlarmCancellationHandler() {
   return Notifications.addNotificationResponseReceivedListener((response) => {
     const chainId =
-      response?.notification?.request?.content?.data?.chainId || null;
+      /** @type {string|null} */ (
+        response?.notification?.request?.content?.data?.chainId || null
+      );
 
     // Any interaction with the alarm (plain tap OR the stop button) ends
     // this prayer's ringing session. Next prayer's alarm is untouched.

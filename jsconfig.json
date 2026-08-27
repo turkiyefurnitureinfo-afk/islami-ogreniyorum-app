@@ -1,0 +1,41 @@
+{
+  // VS Code JavaScript project configuration (IntelliSense + Problems panel).
+  // Scoped to the React Native app sources only; native/server/web folders use
+  // their own toolchains (Gradle / npm / Metro) and are excluded from JS checks.
+  //
+  // NOTE: files listed in "exclude" are still checked when IMPORTED by an
+  // included file — hence maxNodeModuleJsDepth below, which stops dependency
+  // type-checking inside node_modules entirely.
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "maxNodeModuleJsDepth": 0,
+    "noEmit": true
+  },
+  "exclude": [
+    "node_modules",
+    "android",
+    "server",
+    "website",
+    "dist",
+    ".expo",
+    "**/build/**",
+    // One-off development/maintenance scripts (asset generation etc.) —
+    // never shipped in the app bundle.
+    "convert-icon.js",
+    "gen-high-sound.js",
+    "generate-assets.js",
+    "verify-setup.js",
+    "installAsync.js",
+    "update-events.js"
+  ]
+}

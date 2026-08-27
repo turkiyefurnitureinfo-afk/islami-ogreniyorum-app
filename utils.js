@@ -47,7 +47,8 @@ function normalizeMinutes(minutes) {
  */
 export function computeTimes(now, latitude, longitude, tz, methodKey = 'diyanet') {
   const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 0));
-  const dayOfYear = Math.floor((now - startOfYear) / 86400000);
+  // Explicit getTime() form — numerically identical to Date subtraction.
+  const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000);
 
   const decl = sunDeclination(dayOfYear);
   const eot = equationOfTime(dayOfYear);

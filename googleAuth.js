@@ -146,9 +146,12 @@ export async function signInWithGoogle() {
       // Surface Google's REAL reason (redirect_uri_mismatch, invalid_client,
       // access_denied...) instead of just "cancelled".
       console.log('Google sign-in did not succeed:', JSON.stringify(result));
+      // Non-success results carry OAuth error details on params/error; the
+      // union type doesn't expose them, so widen locally (no runtime effect).
+      const failedResult = /** @type {any} */ (result);
       const googleError =
-        (result.params && (result.params.error || result.params.error_description)) ||
-        (result.error && result.error.message) ||
+        (failedResult.params && (failedResult.params.error || failedResult.params.error_description)) ||
+        (failedResult.error && failedResult.error.message) ||
         '';
       if (typeof googleError === 'string' && googleError.includes('access_denied')) {
         return {
