@@ -122,7 +122,7 @@ const assets = [
   ['favicon.png', 48, 48, faviconPixel],
 ];
 
-for (const [name, w, h, pixelFn] of assets) {
+for (const [name, w, h, pixelFn] of /** @type {[string, number, number, function(number, number): number[]][]} */ (assets)) {
   const png = createPNG(w, h, pixelFn);
   const filePath = path.join(assetsDir, name);
   fs.writeFileSync(filePath, png);

@@ -10,6 +10,15 @@
 const { searchGoogle } = require('./google-search');
 const { getGeminiAnswer } = require('./gemini-answer');
 
+/**
+ * Unified answer shape returned by every priority level of getAIAnswer().
+ * @typedef {Object} AIAnswer
+ * @property {string} answer
+ * @property {'gemini'|'google'|'builtin'} provider
+ * @property {string} [source] - source name (Google results only)
+ * @property {string} [href] - source URL (Google results only)
+ */
+
 // ---------- Turkish character normalization for keyword matching ----------
 function normalize(text) {
   return (text || '')
@@ -152,7 +161,7 @@ async function getGoogleAnswer(question, language) {
  *
  * @param {string} question - the user's question
  * @param {string} language - 'tr' or 'en'
- * @returns {Promise<{answer: string, source?: string, href?: string, provider: 'google'|'builtin'}>}
+ * @returns {Promise<AIAnswer>} prioritized answer (Gemini -> Google -> builtin)
  */
 async function getAIAnswer(question, language = 'tr') {
   // Input validation and sanitization

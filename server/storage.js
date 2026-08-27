@@ -27,7 +27,10 @@ async function initStorage() {
   }
 
   try {
-    const admin = require('firebase-admin');
+    // firebase-admin ships CJS with a namespace-shaped export; under v12 both
+    // accessors exist directly. The typeof guards below remain as a safety net
+    // for exotic builds (the casts keep JS type-checking quiet).
+    const adminNs = /** @type {any} */ (require('firebase-admin'));
 
     // Support two ways of providing the service-account key so the server
     // deploys cleanly to cloud hosts (Render/Heroku/etc.):
@@ -71,15 +74,15 @@ async function initStorage() {
     }
 
     const credential =
-      typeof admin.credential?.cert === 'function'
-        ? admin.credential.cert(serviceAccount)
-        : admin.cert(serviceAccount);
-    admin.initializeApp({ credential });
+      typeof adminNs.credential?.cert === 'function'
+        ? adminNs.credential.cert(serviceAccount)
+        : adminNs.cert(serviceAccount);
+    adminNs.initializeApp({ credential });
 
     // Same v13+ flattening applies to Firestore: admin.firestore() existed on
     // older versions, newer versions expose getFirestore() via sub-module.
-    if (typeof admin.firestore === 'function') {
-      db = admin.firestore();
+    if (typeof adminNs.firestore === 'function') {
+      db = adminNs.firestore();
     } else {
       db = require('firebase-admin/firestore').getFirestore();
     }
@@ -393,25 +396,29 @@ const fsImpl = {
 };
 
 /* ------------------------------ Dispatchers ------------------------------ */
-const impl = () => (mode === 'firestore' ? fsImpl : memImpl);
+// Cast keeps JS type-checking happy: the Firestore/memory backends declare
+// slightly different signatures, so forwarded spread calls upset strict
+// union-signature analysis. Erased at runtime — dispatch stays unchanged.
+const impl = () => /** @type {any} */ (mode === 'firestore' ? fsImpl : memImpl);
 
+// Forward every call to the active backend, preserving all arguments.
 module.exports = {
   initStorage,
   isFirestoreEnabled: () => mode === 'firestore',
-  getDevice: (...a) => impl().getDevice(...a),
-  setDevice: (...a) => impl().setDevice(...a),
-  removeDevice: (...a) => impl().removeDevice(...a),
-  getAllDevices: (...a) => impl().getAllDevices(...a),
-  createQAPost: (...a) => impl().createQAPost(...a),
-  getQAPost: (...a) => impl().getQAPost(...a),
-  addQAContribution: (...a) => impl().addQAContribution(...a),
-  likeQAContribution: (...a) => impl().likeQAContribution(...a),
-  registerCommunityPost: (...a) => impl().registerCommunityPost(...a),
-  getCommunityPost: (...a) => impl().getCommunityPost(...a),
-  setCommunityComment: (...a) => impl().setCommunityComment(...a),
-  getCommunityComment: (...a) => impl().getCommunityComment(...a),
-  listQAPosts: (...a) => impl().listQAPosts(...a),
-  listCommunityPosts: (...a) => impl().listCommunityPosts(...a),
-  addReport: (...a) => impl().addReport(...a),
-  counts: (...a) => impl().counts(...a),
+  getDevice: (...args) => impl().getDevice(...args),
+  setDevice: (...args) => impl().setDevice(...args),
+  removeDevice: (...args) => impl().removeDevice(...args),
+  getAllDevices: (...args) => impl().getAllDevices(...args),
+  createQAPost: (...args) => impl().createQAPost(...args),
+  getQAPost: (...args) => impl().getQAPost(...args),
+  addQAContribution: (...args) => impl().addQAContribution(...args),
+  likeQAContribution: (...args) => impl().likeQAContribution(...args),
+  registerCommunityPost: (...args) => impl().registerCommunityPost(...args),
+  getCommunityPost: (...args) => impl().getCommunityPost(...args),
+  setCommunityComment: (...args) => impl().setCommunityComment(...args),
+  getCommunityComment: (...args) => impl().getCommunityComment(...args),
+  listQAPosts: (...args) => impl().listQAPosts(...args),
+  listCommunityPosts: (...args) => impl().listCommunityPosts(...args),
+  addReport: (...args) => impl().addReport(...args),
+  counts: (...args) => impl().counts(...args),
 };

@@ -34,11 +34,18 @@ for (const method of ['get', 'post', 'put', 'delete', 'patch']) {
 }
 
 // Last-resort process guards: log loudly but never exit mid-flight.
+/** Render any thrown value safely for logging (unknown-typed by design). */
+function describeFatal(value) {
+  if (value && typeof value === 'object' && 'stack' in value) {
+    return /** @type {Error} */ (value).stack;
+  }
+  return String(value);
+}
 process.on('uncaughtException', (err) => {
-  console.error('[fatal] uncaughtException:', (err && err.stack) || err);
+  console.error('[fatal] uncaughtException:', describeFatal(err));
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[fatal] unhandledRejection:', (reason && reason.stack) || reason);
+  console.error('[fatal] unhandledRejection:', describeFatal(reason));
 });
 
 // Initialize Expo push notification client
@@ -453,7 +460,9 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/news', async (req, res) => {
   try {
     const language = req.query.lang === 'en' ? 'en' : 'tr';
-    const items = await collectNews(language);
+    // Note: collectNews() takes no arguments today (returns the combined
+    // feed); the query parameter stays reserved for future filtering.
+    const items = await collectNews();
     res.json({ success: true, items, count: items.length });
   } catch (error) {
     console.error('News endpoint error:', error.message);

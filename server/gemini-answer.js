@@ -56,9 +56,10 @@ async function callGemini(model, prompt, apiKey) {
   });
 
   if (!res.ok) {
-    const err = new Error(`Gemini HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
+    // Carry the HTTP status so callers can short-circuit auth/quota errors.
+    throw Object.assign(new Error(`Gemini HTTP ${res.status}`), {
+      status: res.status,
+    });
   }
 
   const data = await res.json();
