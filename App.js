@@ -34,6 +34,8 @@ import {
   registerDeviceWithBackend,
   unregisterDeviceFromBackend,
   notifyBackendNewQuestion,
+  notifyBackendNewContribution,
+  notifyBackendLike,
   notifyBackendCommunityPost,
   notifyBackendCommunityComment,
   notifyBackendCommunityPostLike,

@@ -190,12 +190,7 @@ const CommunityTab = ({
             {media.type === 'image' ? (
               <Image source={{ uri: media.uri }} style={styles.communityMediaImage} />
             ) : (
-              <Video
-                source={{ uri: media.uri }}
-                style={styles.communityMediaVideo}
-                useNativeControls
-                resizeMode="cover"
-              />
+              <PostVideo uri={media.uri} style={styles.communityMediaVideo} />
             )}
             <Pressable onPress={() => setMedia(null)}>
               <Text style={styles.communityMediaRemove}>✕ {t?.removeMedia || 'Remove Media'}</Text>

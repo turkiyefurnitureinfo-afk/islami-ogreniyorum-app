@@ -97,9 +97,6 @@ const QATab = ({
     authorEmail: ans.ownerEmail,
   });
 
-  const handleReportQuestion = (questionId) => {
-    console.log(`Reported question: ${questionId}`);
-  };
   // Prevent crash if qAndA is not an array.
   if (!Array.isArray(qAndA)) {
     return (

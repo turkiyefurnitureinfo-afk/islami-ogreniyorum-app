@@ -154,7 +154,7 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
         // Initial ring at prayer time
         await Notifications.scheduleNotificationAsync({
           content: buildContent(body, chainId),
-          trigger: fire,
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fire },
         });
         scheduled++;
 
@@ -167,7 +167,7 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
               ...buildContent(body + reminderSuffix, chainId),
               title,
             },
-            trigger: at,
+            trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
           });
           scheduled++;
         }
@@ -189,10 +189,13 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
 
     await Notifications.scheduleNotificationAsync({
       content: buildContent(body, null),
+      // SDK 53 (expo-notifications 0.31.x) requires the explicit typed form;
+      // the legacy bare {hour, minute, repeats} shape is silently ignored on
+      // Android (it parses as a channel-only trigger instead of a daily one).
       trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DAILY,
         hour,
         minute,
-        repeats: true,
       },
     });
   }
@@ -252,10 +255,6 @@ export function registerPrayerAlarmCancellationHandler() {
   });
 }
 
-/**
- * Android requires a notification channel for local notifications.
- * This should be called once at app startup.
- */
 /**
  * Android requires a notification channel for local notifications.
  * This should be called once at app startup.
@@ -473,7 +472,7 @@ export async function scheduleEventNotification({ title, body, eventDate, sound 
       body,
       sound,
     },
-    trigger: fireTime,
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fireTime },
   });
 }
 
