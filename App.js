@@ -801,13 +801,28 @@ const [profileDirectory, setProfileDirectory] = useState({});
         setSignedIn(true);
         saveAccount(merged);
 
-        // Refresh the display name from the server copy, best-effort.
+        // Refresh the display name AND profile picture from the server copy,
+        // best-effort. This is what survives an uninstall/reinstall: the local
+        // AsyncStorage is wiped, so on a fresh login we must pull the avatar URL
+        // back from the backend so it isn't lost until the user visits Settings.
         fetchServerUser(merged.email).then((serverUser) => {
-          if (serverUser && serverUser.fullName) {
-            const enriched = { ...merged, fullName: serverUser.fullName };
-            setAccount(enriched);
-            saveAccount(enriched);
+          if (!serverUser) return;
+          const enriched = { ...merged };
+          if (serverUser.fullName) enriched.fullName = serverUser.fullName;
+          if (serverUser.profilePicture) {
+            enriched.profilePicture = serverUser.profilePicture;
+            setProfilePicture(serverUser.profilePicture);
           }
+          setAccount(enriched);
+          saveAccount(enriched);
+          // Persist per-email so Settings → Edit Profile can pre-fill it.
+          saveProfileForEmail(merged.email, {
+            fullName: enriched.fullName || '',
+            profilePicture: enriched.profilePicture || '',
+            occupation: '',
+            address: '',
+            bio: '',
+          }).catch(() => {});
         }).catch(() => {});
 
         registerUserProfile(merged.email, merged.fullName, null, merged.profilePicture || null);
