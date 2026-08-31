@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "817195380589",
+    "project_id": "islami-ogreniyorum",
+    "storage_bucket": "islami-ogreniyorum.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:817195380589:android:aa2049bbae8fb9f7c9b464",
+        "android_client_info": {
+          "package_name": "com.joshua.islamiogreniyorum"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "817195380589-3i1aml4qbto4cve3tmi8kjnmrqm0bro3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joshua.islamiogreniyorum",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "817195380589-posfh2h08650q1pmripm3h6g8js7mug2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joshua.islamiogreniyorum",
+            "certificate_hash": "8dfc3d55be275d81a177064c9321f91d04b44921"
+          }
+        },
+        {
+          "client_id": "817195380589-3d5uioh20iaiehr20b7dj9ch76t3jk8r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwIT4O1c_24SzLx42CuI36mjYhX24YFcY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "817195380589-3d5uioh20iaiehr20b7dj9ch76t3jk8r.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -158,10 +158,107 @@ async function broadcastPush(title, body, data = {}) {
     try {
       const ticketIds = await expo.sendPushNotificationsAsync(chunk);
       console.log('Broadcast sent:', ticketIds);
-    } catch (error) {
+        } catch (error) {
       console.error('Broadcast error:', error);
     }
   }
+}
+
+// ---- Centralized notification dispatch ----
+// Implements the four routing rules in one place so every trigger computes
+// its recipient set identically and ALWAYS excludes the triggering user:
+//
+//   new_question -> every registered device (Q&A: a brand-new question)
+//   new_answer    -> question owner + every prior answerer (Q&A thread)
+//   new_post      -> every registered device (Community: a brand-new post)
+//   new_comment   -> post owner + every prior commenter (Community thread)
+//
+// Participant-scoped triggers (new_answer / new_comment) do a single
+// sub-collection scan per feed item to collect distinct author userIds;
+// broadcast triggers (new_question / new_post) read the device registry once.
+
+/**
+ * Compute the distinct recipient userIds for a content trigger, applying the
+ * routing rules and EXCLUDING the triggering user.
+ *
+ * @param {'new_question'|'new_answer'|'new_post'|'new_comment'} trigger
+ * @param {string} triggerUserId - always excluded from recipients
+ * @param {string} entityId - postId (needed for participant-scoped triggers)
+ * @returns {Promise<string[]>} recipient userIds
+ */
+async function computeRecipients(trigger, triggerUserId, entityId) {
+  const isBroadcast = trigger === 'new_question' || trigger === 'new_post';
+  if (isBroadcast) {
+    // Rule 1 & 3: every registered user.
+    const devices = await storage.getAllDevices();
+    return [...new Set(devices.map((d) => String(d.userId)).filter(Boolean))];
+  }
+
+  // Rules 2 & 4: thread participants only (owner + prior authors).
+  let participantIds;
+  if (trigger === 'new_answer') {
+    participantIds = await storage.getQAParticipantUserIds(entityId);
+  } else if (trigger === 'new_comment') {
+    participantIds = await storage.getCommunityParticipantUserIds(entityId);
+  } else {
+    return [];
+  }
+
+  // Always exclude the user who triggered the action.
+  return participantIds.filter((id) => String(id) !== String(triggerUserId));
+}
+
+/**
+ * Dispatch a push notification to every computed recipient.
+ *
+ * Device tokens are fetched once per recipient (batched with Promise.all)
+ * so a large recipient set incurs ~1 storage round-trip per user rather
+ * than N sequential lookups. Expo auto-chunks the message batches.
+ *
+ * @param {object} params
+ * @param {'new_question'|'new_answer'|'new_post'|'new_comment'} params.trigger
+ * @param {string} params.triggerUserId - excluded from recipients
+ * @param {string} params.entityId - postId for participant-scoped triggers
+ * @param {string} params.title
+ * @param {string} params.body
+ * @param {object} [params.data] - extra data payload
+ */
+async function dispatchNotification({ trigger, triggerUserId, entityId, title, body, data = {} }) {
+  const recipientIds = await computeRecipients(trigger, triggerUserId, entityId);
+  if (recipientIds.length === 0) return;
+
+  // Batch-fetch device tokens once per recipient (avoids N+1 getDevice calls).
+  const devicesByUser = {};
+  await Promise.all(
+    recipientIds.map(async (uid) => {
+      devicesByUser[uid] = await storage.getDevice(uid);
+    })
+  );
+
+  const messages = [];
+  for (const uid of recipientIds) {
+    const device = devicesByUser[uid];
+    if (!device || !device.expoPushToken) continue;
+    messages.push({
+      to: device.expoPushToken,
+      sound: 'default',
+      title,
+      body,
+      data: { ...data, recipientUserId: uid },
+    });
+  }
+
+  if (messages.length === 0) return;
+
+  const chunks = expo.chunkPushNotifications(messages);
+  for (const chunk of chunks) {
+    try {
+      await expo.sendPushNotificationsAsync(chunk);
+    } catch (error) {
+      console.error('[dispatch] push send failed:', error.message);
+    }
+  }
+  console.log(`[dispatch] ${trigger} -> ${messages.length} push(es) sent (triggered by ${triggerUserId})`);
 }
 
 // ---------- Routes ----------
@@ -191,7 +288,7 @@ app.post('/api/unregister', requireVerifiedUser, (req, res) => {
   res.json({ success: true });
 });
 
-// Post a new question -> notify all other users
+// Post a new question -> notify all other users (Rule 1: broadcast)
 app.post('/api/posts', requireVerifiedUser, async (req, res) => {
   const userId = req.verifiedUserId;
   const { question, name, avatar } = req.body;
@@ -201,26 +298,20 @@ app.post('/api/posts', requireVerifiedUser, async (req, res) => {
 
   const postId = await storage.createQAPost(userId, question, name || null, avatar || null);
 
-  const author = await storage.getDevice(userId);
-  const authorName = author?.name || 'A user';
-
-  // Notify all OTHER users about the new question
-  const allDevices = await storage.getAllDevices();
-  for (const device of allDevices) {
-    if (device.userId !== userId) {
-      await sendPushToUser(
-        device.userId,
-        'New Question',
-        `${authorName} asked: "${question.slice(0, 60)}${question.length > 60 ? '...' : ''}"`,
-        { type: 'new_question', postId }
-      );
-    }
-  }
+  // Rule 1: every registered user except the asker.
+  await dispatchNotification({
+    trigger: 'new_question',
+    triggerUserId: userId,
+    entityId: postId,
+    title: 'New Question',
+    body: `${name || 'A user'} asked: "${question.slice(0, 60)}${question.length > 60 ? '...' : ''}"`,
+    data: { type: 'new_question', postId },
+  });
 
   res.json({ success: true, postId });
 });
 
-// Add a contribution/comment -> notify the question author
+// Add a contribution to a Q&A question -> notify owner + prior answerers (Rule 2)
 app.post('/api/posts/:postId/contributions', requireVerifiedUser, async (req, res) => {
   const { postId } = req.params;
   const userId = req.verifiedUserId;
@@ -236,22 +327,22 @@ app.post('/api/posts/:postId/contributions', requireVerifiedUser, async (req, re
 
   const contribId = await storage.addQAContribution(postId, userId, text, name || null, avatar || null);
 
-  // Notify the question author (if not the same user)
-  if (post.ownerUserId !== userId) {
-    const commenter = await storage.getDevice(userId);
-    const commenterName = commenter?.name || 'A user';
-    await sendPushToUser(
-      post.ownerUserId,
-      'New Comment',
-      `${commenterName} commented: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`,
-      { type: 'new_comment', postId, contributionId: contribId }
-    );
-  }
+  // Rule 2: question owner + every prior answerer, minus the new answerer.
+  // computeRecipients fetches participants in a single sub-collection scan and
+  // auto-excludes the triggering user.
+  await dispatchNotification({
+    trigger: 'new_answer',
+    triggerUserId: userId,
+    entityId: postId,
+    title: 'New Answer',
+    body: `${name || 'A user'} answered: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`,
+    data: { type: 'new_answer', postId, contributionId: contribId },
+  });
 
   res.json({ success: true, contributionId: contribId });
 });
 
-// Like a contribution -> notify the contribution author
+// Like / unlike a Q&A contribution -> notify the contribution author (toggle)
 app.post('/api/posts/:postId/contributions/:contribId/like', requireVerifiedUser, async (req, res) => {
   const { postId, contribId } = req.params;
   const userId = req.verifiedUserId;
@@ -259,13 +350,13 @@ app.post('/api/posts/:postId/contributions/:contribId/like', requireVerifiedUser
     return res.status(400).json({ error: 'userId is required' });
   }
 
-  const result = await storage.likeQAContribution(postId, contribId);
+  const result = await storage.likeQAContribution(postId, contribId, userId);
   if (!result) {
     return res.status(404).json({ error: 'Contribution not found' });
   }
 
-  // Notify the contribution author (if not the same user)
-  if (result.userId !== userId) {
+  // Notify the contribution author only on a fresh like (not on un-like).
+  if (result.likedByMe && result.userId && String(result.userId) !== String(userId)) {
     const liker = await storage.getDevice(userId);
     const likerName = liker?.name || 'A user';
     await sendPushToUser(
@@ -276,7 +367,35 @@ app.post('/api/posts/:postId/contributions/:contribId/like', requireVerifiedUser
     );
   }
 
-  res.json({ success: true, likes: result.likes });
+  res.json({ success: true, likes: result.likes, likedByMe: result.likedByMe });
+});
+
+// Like / unlink a Q&A question -> notify the question author (toggle)
+app.post('/api/posts/:postId/like', requireVerifiedUser, async (req, res) => {
+  const { postId } = req.params;
+  const userId = req.verifiedUserId;
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  const result = await storage.likeQAQuestion(postId, userId);
+  if (!result) {
+    return res.status(404).json({ error: 'Post not found' });
+  }
+
+  // Notify the question author only on a fresh like (not on un-like).
+  if (result.likedByMe && result.ownerUserId && String(result.ownerUserId) !== String(userId)) {
+    const liker = await storage.getDevice(userId);
+    const likerName = liker?.name || 'A user';
+    await sendPushToUser(
+      result.ownerUserId,
+      'New Like',
+      `${likerName} liked your question`,
+      { type: 'new_like', postId }
+    );
+  }
+
+  res.json({ success: true, likes: result.likes, likedByMe: result.likedByMe });
 });
 
 // Delete a Q&A question (owner only) -> removes it from the shared feed for everyone.
@@ -446,8 +565,7 @@ app.get('/api/prayer-times', async (req, res) => {
 // The app is local-first: it keeps its own post/comment IDs. Devices register
 // their posts here so comments/likes can be routed back to the right author.
 
-// Register a community post (called by the author's device after creating it).
-// Stores the full content so every device can fetch the shared feed.
+// Register a community post -> notify all other users (Rule 3: broadcast)
 app.post('/api/community/posts', requireVerifiedUser, async (req, res) => {
   const { postId, text, name, avatar, mediaType, mediaUri } = req.body;
   const userId = req.verifiedUserId;
@@ -462,11 +580,23 @@ app.post('/api/community/posts', requireVerifiedUser, async (req, res) => {
     mediaType: mediaType || null,
     mediaUri: mediaUri || null,
   });
+
+  // Rule 3: every registered user except the creator.
+  const truncatedText = (typeof text === 'string' ? text : '').slice(0, 60);
+  await dispatchNotification({
+    trigger: 'new_post',
+    triggerUserId: userId,
+    entityId: postId,
+    title: 'New Post',
+    body: `${name || 'A user'} shared: "${truncatedText}${(typeof text === 'string' ? text : '').length > 60 ? '...' : ''}"`,
+    data: { type: 'new_post', postId },
+  });
+
   console.log(`Community post ${postId} registered for ${userId}`);
   res.json({ success: true });
 });
 
-// Comment on a community post -> notify the post author
+// Comment on a community post -> notify owner + prior commenters (Rule 4)
 app.post('/api/community/posts/:postId/comments', requireVerifiedUser, async (req, res) => {
   const { postId } = req.params;
   const userId = req.verifiedUserId;
@@ -486,22 +616,22 @@ app.post('/api/community/posts/:postId/comments', requireVerifiedUser, async (re
     authorAvatar: avatar || null,
   });
 
-  // Notify the post owner (if the commenter isn't the owner)
-  if (post.ownerUserId !== userId) {
-    const commenter = await storage.getDevice(userId);
-    const commenterName = commenter?.name || name || 'A user';
-    await sendPushToUser(
-      post.ownerUserId,
-      'New Comment',
-      `${commenterName} commented on your post: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`,
-      { type: 'community_comment', postId, commentId }
-    );
-  }
+  // Rule 4: post owner + every prior commenter, minus the new commenter.
+  // computeRecipients fetches participants in a single sub-collection scan and
+  // auto-excludes the triggering user.
+  await dispatchNotification({
+    trigger: 'new_comment',
+    triggerUserId: userId,
+    entityId: postId,
+    title: 'New Comment',
+    body: `${name || 'A user'} commented: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`,
+    data: { type: 'community_comment', postId, commentId },
+  });
 
   res.json({ success: true });
 });
 
-// Like a community post -> notify the post author
+// Like / unlike a community post -> notify the post author (toggle)
 app.post('/api/community/posts/:postId/like', requireVerifiedUser, async (req, res) => {
   const { postId } = req.params;
   const userId = req.verifiedUserId;
@@ -510,26 +640,27 @@ app.post('/api/community/posts/:postId/like', requireVerifiedUser, async (req, r
     return res.status(400).json({ error: 'userId is required' });
   }
 
-  const post = await storage.getCommunityPost(postId);
-  if (!post) {
+  const result = await storage.likeCommunityPost(postId, userId);
+  if (!result) {
     return res.status(404).json({ error: 'Post not found' });
   }
 
-  if (post.ownerUserId !== userId) {
+  // Notify the post author only on a fresh like (not on un-like).
+  if (result.likedByMe && result.ownerUserId && String(result.ownerUserId) !== String(userId)) {
     const liker = await storage.getDevice(userId);
     const likerName = liker?.name || name || 'A user';
     await sendPushToUser(
-      post.ownerUserId,
+      result.ownerUserId,
       'New Like',
       `${likerName} liked your post`,
       { type: 'community_post_like', postId }
     );
   }
 
-  res.json({ success: true });
+  res.json({ success: true, likes: result.likes, likedByMe: result.likedByMe });
 });
 
-// Like a comment on a community post -> notify the comment's author
+// Like / unlike a comment on a community post -> notify the comment's author (toggle)
 app.post('/api/community/posts/:postId/comments/:commentId/like', requireVerifiedUser, async (req, res) => {
   const { postId, commentId } = req.params;
   const userId = req.verifiedUserId;
@@ -538,23 +669,24 @@ app.post('/api/community/posts/:postId/comments/:commentId/like', requireVerifie
     return res.status(400).json({ error: 'userId is required' });
   }
 
-  const comment = await storage.getCommunityComment(postId, commentId);
-  if (!comment) {
+  const result = await storage.likeCommunityComment(postId, commentId, userId);
+  if (!result) {
     return res.status(404).json({ error: 'Comment not found' });
   }
 
-  if (comment.userId !== userId) {
+  // Notify the comment author only on a fresh like (not on un-like).
+  if (result.likedByMe && result.userId && String(result.userId) !== String(userId)) {
     const liker = await storage.getDevice(userId);
     const likerName = liker?.name || name || 'A user';
     await sendPushToUser(
-      comment.userId,
+      result.userId,
       'New Like',
       `${likerName} liked your comment`,
       { type: 'community_comment_like', postId, commentId }
     );
   }
 
-  res.json({ success: true });
+  res.json({ success: true, likes: result.likes, likedByMe: result.likedByMe });
 });
 
 // Delete a community post (owner only) -> removes it from the shared feed.

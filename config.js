@@ -28,23 +28,14 @@ export const SUPPORT_EMAIL = 'info@learningislamapp.com';
 // ---------------------------------------------------------------------------
 // Sign-up / login is handled by the NATIVE Firebase module
 // (@react-native-firebase/auth). It reads its configuration at BUILD TIME from
-// the native config file — NOT from these constants:
+// the native config file:
 //   Android: google-services.json at the repo root
 //            (Firebase console → Project Settings → Your apps → Android app,
 //             package name com.joshua.islamiogreniyorum → download
 //             google-services.json → place it at the repo root, next to
 //             app.json, then rebuild with EAS)
 //   iOS:     GoogleService-Info.plist (needed only for iOS builds)
-// The constants below are legacy JS-SDK placeholders and are intentionally
-// left empty. Email/password auth works without them as long as the native
-// config file is present. They are kept only so any external tooling that
-// imports them does not break.
-export const FIREBASE_API_KEY = '';
-export const FIREBASE_AUTH_DOMAIN = '';
-export const FIREBASE_PROJECT_ID = '';
-export const FIREBASE_STORAGE_BUCKET = '';
-export const FIREBASE_MESSAGING_SENDER_ID = '';
-export const FIREBASE_APP_ID = '';
+// No JS-SDK constants needed — native auth works without them.
 
 // ---------------------------------------------------------------------------
 // Google OAuth Configuration
@@ -76,3 +67,53 @@ export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-3i1aml4qbto4cve3tmi8kjnmrq
 export const GOOGLE_ANDROID_CLIENT_ID_EAS = '817195380589-posfh2h08650q1pmripm3h6g8js7mug2.apps.googleusercontent.com';
 export const GOOGLE_ANDROID_CLIENT_ID_RELEASE = '817195380589-2a0fo0smv7ssunhp82a3dopprdgvpobv.apps.googleusercontent.com'; // Android client for my-upload-key.keystore (SHA-1 6E:8E:23:CA:…) — created when the fingerprint was registered
 export const GOOGLE_WEB_CLIENT_ID = '817195380589-3d5uioh20iaiehr20b7dj9ch76t3jk8r.apps.googleusercontent.com';
+
+// ---------------------------------------------------------------------------
+// Security Hardening Configuration
+// ---------------------------------------------------------------------------
+
+// Certificate pinning: SHA-256 hashes of your server's SSL certificate public keys.
+// Replace with your actual certificate hashes. To get them:
+//   openssl s_client -connect islami-ogreniyorum-server.onrender.com:443 | openssl x590 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+// Pinning prevents man-in-the-middle attacks even if the device trusts a rogue CA.
+export const PINNED_CERTIFICATE_HASHES = [
+  // 'sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', // Replace with actual hash
+  // 'sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=', // Backup pin
+];
+
+// Request signing: adds HMAC-SHA256 signature to API requests for tamper detection.
+// The server should validate this signature. This is a shared secret between app and server.
+// IMPORTANT: In production, retrieve this from a secure key exchange, never hardcode.
+export const REQUEST_SIGNING_KEY = 'islami-ogreniyorum-secure-signing-key-2024';
+
+// Rate limiting: client-side throttle to prevent accidental API flooding.
+// Limits are per-endpoint within the specified window.
+export const RATE_LIMITS = {
+  // Default rate limit for most endpoints
+  default: {
+    maxRequests: 30,    // Maximum requests
+    windowMs: 60000,    // Per 60 seconds
+  },
+  // Stricter limits for write operations
+  write: {
+    maxRequests: 10,    // Maximum write requests
+    windowMs: 60000,    // Per 60 seconds
+  },
+  // AI endpoints (expensive operations)
+  ai: {
+    maxRequests: 5,     // Maximum AI requests
+    windowMs: 60000,    // Per 60 seconds
+  },
+  // Authentication endpoints (brute-force protection)
+  auth: {
+    maxRequests: 5,     // Maximum auth attempts
+    windowMs: 300000,   // Per 5 minutes
+  },
+};
+
+// Enable/disable security features (useful for development)
+export const SECURITY_CONFIG = {
+  enableCertificatePinning: false,  // Set to true after configuring PINNED_CERTIFICATE_HASHES
+  enableRequestSigning: true,       // Adds X-Request-Signature header to API calls
+  enableRateLimit: true,            // Client-side rate limiting
+};

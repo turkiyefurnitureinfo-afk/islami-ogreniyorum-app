@@ -1,7 +1,8 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
-import { API_URL } from './config.js';
+import { API_URL, SECURITY_CONFIG } from './config.js';
+import { getSecurityHeaders, checkRateLimit, validatePinningConfig } from './security.js';
 
 // Configure how notifications are presented while the app is in the foreground
 Notifications.setNotificationHandler({
@@ -92,6 +93,114 @@ async function currentIdToken() {
 export async function authHeaders() {
   const token = await currentIdToken();
   return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
+// ---------------------------------------------------------------------------
+// Secure API Fetch Utilities
+// ---------------------------------------------------------------------------
+// These utilities add request signing and rate limiting to all backend API
+// calls without breaking existing functionality. All features are opt-in via
+// SECURITY_CONFIG flags.
+
+/**
+ * Extract the endpoint path from a full URL for rate limiting.
+ * @param {string} url - Full API URL
+ * @returns {string} Endpoint path (e.g., '/api/users')
+ */
+function extractEndpoint(url) {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.pathname || url;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Determine the rate limit category based on the API endpoint.
+ * @param {string} path - API endpoint path
+ * @param {string} method - HTTP method
+ * @returns {string} Category: 'auth', 'ai', 'write', or 'default'
+ */
+function getRateLimitCategory(path, method) {
+  const lowerPath = path.toLowerCase();
+
+  // Authentication endpoints
+  if (lowerPath.includes('/auth') || lowerPath.includes('/login') || lowerPath.includes('/register')) {
+    return 'auth';
+  }
+
+  // AI endpoints
+  if (lowerPath.includes('/ai/') || lowerPath.includes('/translate') || lowerPath.includes('/gemini')) {
+    return 'ai';
+  }
+
+  // Write operations
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
+    return 'write';
+  }
+
+  return 'default';
+}
+
+/**
+ * Secure fetch wrapper that adds request signing and rate limiting.
+ * Transparently adds security headers and enforces client-side rate limits.
+ *
+ * @param {string} url - The full API URL to fetch
+ * @param {object} options - Standard fetch options
+ * @param {string} options.method - HTTP method (GET, POST, PUT, DELETE)
+ * @param {object} options.headers - Existing headers to merge with
+ * @param {object|string} options.body - Request body
+ * @param {number} [options.timeout] - Request timeout in ms
+ * @returns {Promise<{ok: boolean, status: number, json: () => Promise<any>, text: () => Promise<string>}>}
+ */
+export async function secureFetch(url, options = {}) {
+  const { method = 'GET', body = null, ...restOptions } = options;
+  const endpoint = extractEndpoint(url);
+  const category = getRateLimitCategory(endpoint, method);
+
+  // Check rate limit before making request
+  const rateLimitCheck = checkRateLimit(endpoint, category);
+  if (!rateLimitCheck.allowed) {
+    const waitSeconds = Math.ceil((rateLimitCheck.resetTime - Date.now()) / 1000);
+    throw new Error(`RATE_LIMITED:${waitSeconds}`);
+  }
+
+  // Validate certificate pinning configuration
+  const pinCheck = validatePinningConfig(url);
+  if (!pinCheck.valid) {
+    console.warn(`Certificate pinning validation failed for ${url}: ${pinCheck.message}`);
+  }
+
+  // Build merged headers with security features
+  const mergedHeaders = {
+    ...options.headers,
+  };
+
+  // Add request signing headers if enabled
+  if (SECURITY_CONFIG.enableRequestSigning) {
+    try {
+      const securityHeaders = await getSecurityHeaders(method, endpoint, body);
+      Object.assign(mergedHeaders, securityHeaders);
+    } catch (error) {
+      console.warn('Failed to generate security headers:', error?.message);
+      // Continue without signing — request still works, just unsigned
+    }
+  }
+
+  // Make the actual fetch request
+  const fetchOptions = {
+    ...restOptions,
+    method,
+    headers: mergedHeaders,
+  };
+
+  if (body) {
+    fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+
+  return fetch(url, fetchOptions);
 }
 
 /**
@@ -386,10 +495,10 @@ export async function registerDeviceWithBackend(userId, name) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/register`, {
+    const response = await secureFetch(`${API_URL}/api/register`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId, expoPushToken, name }),
+      body: { userId, expoPushToken, name },
     });
     return response.ok;
   } catch (error) {
@@ -408,10 +517,10 @@ export async function unregisterDeviceFromBackend(userId) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/unregister`, {
+    const response = await secureFetch(`${API_URL}/api/unregister`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId }),
+      body: { userId },
     });
     return response.ok;
   } catch (error) {
@@ -431,10 +540,10 @@ export async function notifyBackendNewQuestion(userId, question, name, avatar) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/posts`, {
+    const response = await secureFetch(`${API_URL}/api/posts`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId, question, name, avatar: avatar || null }),
+      body: { userId, question, name, avatar: avatar || null },
     });
     if (!response.ok) return { ok: false, postId: null };
     const data = await response.json().catch(() => ({}));
@@ -459,10 +568,10 @@ export async function notifyBackendNewContribution(postId, userId, text, name, a
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/posts/${postId}/contributions`, {
+    const response = await secureFetch(`${API_URL}/api/posts/${postId}/contributions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId, text, name, avatar: avatar || null }),
+      body: { userId, text, name, avatar: avatar || null },
     });
     if (!response.ok) return { ok: false, contributionId: null };
     const data = await response.json().catch(() => ({}));
@@ -485,10 +594,10 @@ export async function notifyBackendLike(postId, contribId, userId) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/posts/${postId}/contributions/${contribId}/like`, {
+    const response = await secureFetch(`${API_URL}/api/posts/${postId}/contributions/${contribId}/like`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId }),
+      body: { userId },
     });
     return response.ok;
   } catch (error) {
@@ -504,10 +613,10 @@ export async function notifyBackendLike(postId, contribId, userId) {
  */
 export async function notifyBackendEvent(title, body) {
   try {
-    const response = await fetch(`${API_URL}/api/events/notify`, {
+    const response = await secureFetch(`${API_URL}/api/events/notify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body }),
+      body: { title, body },
     });
     return response.ok;
   } catch (error) {
@@ -562,10 +671,10 @@ export async function notifyBackendCommunityPost(postId, userId, name, text, med
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/community/posts`, {
+    const response = await secureFetch(`${API_URL}/api/community/posts`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ postId, userId, name, text, mediaType, mediaUri, avatar: avatar || null }),
+      body: { postId, userId, name, text, mediaType, mediaUri, avatar: avatar || null },
     });
     return response.ok;
   } catch (error) {
@@ -590,10 +699,10 @@ export async function sendContentReport({ contentType, contentId, reporterId, re
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/reports`, {
+    const response = await secureFetch(`${API_URL}/api/reports`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ contentType, contentId, reporterId, reason }),
+      body: { contentType, contentId, reporterId, reason },
     });
     return response.ok;
   } catch (error) {
@@ -617,10 +726,10 @@ export async function notifyBackendCommunityComment(postId, commentId, userId, t
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/community/posts/${postId}/comments`, {
+    const response = await secureFetch(`${API_URL}/api/community/posts/${postId}/comments`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ commentId, userId, text, name, avatar: avatar || null }),
+      body: { commentId, userId, text, name, avatar: avatar || null },
     });
     return response.ok;
   } catch (error) {
@@ -642,10 +751,10 @@ export async function notifyBackendCommunityPostLike(postId, userId, name) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/community/posts/${postId}/like`, {
+    const response = await secureFetch(`${API_URL}/api/community/posts/${postId}/like`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId, name }),
+      body: { userId, name },
     });
     return response.ok;
   } catch (error) {
@@ -668,10 +777,10 @@ export async function notifyBackendCommunityCommentLike(postId, commentId, userI
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/community/posts/${postId}/comments/${commentId}/like`, {
+    const response = await secureFetch(`${API_URL}/api/community/posts/${postId}/comments/${commentId}/like`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userId, name }),
+      body: { userId, name },
     });
     return response.ok;
   } catch (error) {
@@ -694,10 +803,10 @@ export async function notifyBackendCommunityCommentLike(postId, commentId, userI
 export async function deleteServerQuestion(serverPostId, userId) {
   try {
     const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
-    const response = await fetch(`${API_URL}/api/posts/${encodeURIComponent(serverPostId)}`, {
+    const response = await secureFetch(`${API_URL}/api/posts/${encodeURIComponent(serverPostId)}`, {
       method: 'DELETE',
       headers,
-      body: JSON.stringify({ userId }),
+      body: { userId },
     });
     return response.ok;
   } catch (error) {
@@ -710,9 +819,9 @@ export async function deleteServerQuestion(serverPostId, userId) {
 export async function deleteServerAnswer(serverPostId, contribId, userId) {
   try {
     const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
-    const response = await fetch(
+    const response = await secureFetch(
       `${API_URL}/api/posts/${encodeURIComponent(serverPostId)}/contributions/${encodeURIComponent(contribId)}`,
-      { method: 'DELETE', headers, body: JSON.stringify({ userId }) }
+      { method: 'DELETE', headers, body: { userId } }
     );
     return response.ok;
   } catch (error) {
@@ -725,10 +834,10 @@ export async function deleteServerAnswer(serverPostId, contribId, userId) {
 export async function deleteServerCommunityPost(postId, userId) {
   try {
     const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
-    const response = await fetch(`${API_URL}/api/community/posts/${encodeURIComponent(postId)}`, {
+    const response = await secureFetch(`${API_URL}/api/community/posts/${encodeURIComponent(postId)}`, {
       method: 'DELETE',
       headers,
-      body: JSON.stringify({ userId }),
+      body: { userId },
     });
     return response.ok;
   } catch (error) {
@@ -741,9 +850,9 @@ export async function deleteServerCommunityPost(postId, userId) {
 export async function deleteServerCommunityComment(postId, commentId, userId) {
   try {
     const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
-    const response = await fetch(
+    const response = await secureFetch(
       `${API_URL}/api/community/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
-      { method: 'DELETE', headers, body: JSON.stringify({ userId }) }
+      { method: 'DELETE', headers, body: { userId } }
     );
     return response.ok;
   } catch (error) {
@@ -772,10 +881,10 @@ export async function registerUserProfile(
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/users/register`, {
+    const response = await secureFetch(`${API_URL}/api/users/register`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
+      body: {
         email,
         fullName,
         passwordHash,
@@ -785,7 +894,7 @@ export async function registerUserProfile(
         occupation: extended?.occupation ?? undefined,
         address: extended?.address ?? undefined,
         bio: extended?.bio ?? undefined,
-      }),
+      },
     });
     return response.ok;
   } catch (error) {
@@ -797,7 +906,7 @@ export async function registerUserProfile(
 /** GET /api/users/:email — fetch the server copy of an account (may be null). */
 export async function fetchServerUser(email) {
   try {
-    const response = await fetch(`${API_URL}/api/users/${encodeURIComponent(String(email).trim().toLowerCase())}`, {
+    const response = await secureFetch(`${API_URL}/api/users/${encodeURIComponent(String(email).trim().toLowerCase())}`, {
       method: 'GET',
     });
     if (!response.ok) return null;
@@ -816,10 +925,10 @@ export async function updateServerUser(currentEmail, patch) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await fetch(`${API_URL}/api/users/${encodeURIComponent(String(currentEmail).trim().toLowerCase())}`, {
+    const response = await secureFetch(`${API_URL}/api/users/${encodeURIComponent(String(currentEmail).trim().toLowerCase())}`, {
       method: 'PUT',
       headers,
-      body: JSON.stringify(patch),
+      body: patch,
     });
     return response.ok;
   } catch (error) {

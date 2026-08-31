@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator, RefreshControl } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { TranslateButton } from './useTranslate.js';
@@ -78,12 +78,23 @@ const CommunityTab = ({
   handleEditComment,
   handleDeleteComment,
   onReport,
+  onRefresh, // Pull-to-refresh callback
 }) => {
   const [media, setMedia] = useState(null); // { type: 'image'|'video', uri }
   const [pickingMedia, setPickingMedia] = useState(false);
   // Inline edit state: only one field is edited at a time.
   const [editKey, setEditKey] = useState(null); // e.g. 'p-123' or 'c-456'
   const [draftText, setDraftText] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefreshInternal = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (onRefresh) await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [onRefresh]);
 
   const isOwn = (ownerEmail) =>
     !!ownerEmail && !!account?.email && ownerEmail === account.email;
@@ -199,7 +210,17 @@ const CommunityTab = ({
   };
 
   return (
-    <ScrollView style={styles.tabContent}>
+    <ScrollView 
+      style={styles.tabContent}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefreshInternal}
+          tintColor={palette.accent}
+          colors={[palette.accent]}
+        />
+      }
+    >
       {/* Create Post */}
       <View style={styles.communityCreateCard}>
         <Text style={styles.communityCreateTitle}>{t?.createPost || 'Create Post'}</Text>

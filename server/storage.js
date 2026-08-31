@@ -145,6 +145,7 @@ const memImpl = {
       authorName: authorName || null,
       authorAvatar: authorAvatar || null,
       likes: 0,
+      likedBy: [],
       createdAt: new Date().toISOString(),
     });
     return postId;
@@ -161,15 +162,51 @@ const memImpl = {
       authorName: authorName || null,
       authorAvatar: authorAvatar || null,
       likes: 0,
+      likedBy: [],
       createdAt: new Date().toISOString(),
     });
     return contributionId;
   },
-  async likeQAContribution(postId, contributionId) {
+  async likeQAContribution(postId, contributionId, userId) {
     const c = memContribs.get(`${postId}:${contributionId}`);
     if (!c) return null;
-    c.likes += 1;
-    return { likes: c.likes, userId: c.userId };
+    const likedBy = c.likedBy || (c.likedBy = []);
+    const wasLiked = likedBy.includes(userId);
+    if (wasLiked) {
+      c.likedBy = likedBy.filter((u) => String(u) !== String(userId));
+    } else {
+      likedBy.push(userId);
+      c.likedBy = likedBy;
+    }
+    c.likes = likedBy.length;
+    return { likes: c.likes, likedByMe: !wasLiked, userId: c.userId };
+  },
+  async likeQAQuestion(postId, userId) {
+    const p = memPosts.get(String(postId));
+    if (!p) return null;
+    const likedBy = p.likedBy || (p.likedBy = []);
+    const wasLiked = likedBy.includes(userId);
+    if (wasLiked) {
+      p.likedBy = likedBy.filter((u) => String(u) !== String(userId));
+    } else {
+      likedBy.push(userId);
+      p.likedBy = likedBy;
+    }
+    p.likes = likedBy.length;
+    return { likes: p.likes, likedByMe: !wasLiked, ownerUserId: p.ownerUserId };
+  },
+  async getQAParticipantUserIds(postId) {
+    const p = memPosts.get(String(postId));
+    if (!p) return [];
+    const ids = new Set();
+    if (p.ownerUserId) ids.add(p.ownerUserId);
+    // Distinct set of every answer author on this thread (single scan).
+    for (const [key, c] of memContribs) {
+      if (key.startsWith(String(postId) + ':') && c.userId) {
+        ids.add(c.userId);
+      }
+    }
+    return [...ids];
   },
   async listQAPosts(limit = 50) {
     const ids = [...memPosts.keys()].slice(-limit).reverse();
@@ -195,6 +232,7 @@ const memImpl = {
       mediaType: meta.mediaType || null,
       mediaUri: meta.mediaUri || null,
       createdAt: meta.createdAt || new Date().toISOString(),
+      likedBy: [],
       comments: new Map(),
     });
   },
@@ -210,6 +248,7 @@ const memImpl = {
       text: meta.text || '',
       authorName: meta.authorName || null,
       authorAvatar: meta.authorAvatar || null,
+      likedBy: [],
       createdAt: new Date().toISOString(),
     });
   },
@@ -231,8 +270,51 @@ const memImpl = {
         mediaType: p.mediaType,
         mediaUri: p.mediaUri,
         createdAt: p.createdAt,
+        likedBy: p.likedBy || [],
         comments: [...p.comments.entries()].map(([cid, c]) => ({ id: cid, ...c })),
       }));
+  },
+
+  async likeCommunityPost(postId, userId) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return null;
+    const likedBy = p.likedBy || (p.likedBy = []);
+    const wasLiked = likedBy.includes(userId);
+    if (wasLiked) {
+      p.likedBy = likedBy.filter((u) => String(u) !== String(userId));
+    } else {
+      likedBy.push(userId);
+      p.likedBy = likedBy;
+    }
+    p.likes = likedBy.length;
+    return { likes: p.likes, likedByMe: !wasLiked, ownerUserId: p.ownerUserId };
+  },
+  async likeCommunityComment(postId, commentId, userId) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return null;
+    const c = p.comments.get(String(commentId));
+    if (!c) return null;
+    const likedBy = c.likedBy || (c.likedBy = []);
+    const wasLiked = likedBy.includes(userId);
+    if (wasLiked) {
+      c.likedBy = likedBy.filter((u) => String(u) !== String(userId));
+    } else {
+      likedBy.push(userId);
+      c.likedBy = likedBy;
+    }
+    c.likes = likedBy.length;
+    return { likes: c.likes, likedByMe: !wasLiked, userId: c.userId };
+  },
+  async getCommunityParticipantUserIds(postId) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return [];
+    const ids = new Set();
+    if (p.ownerUserId) ids.add(p.ownerUserId);
+    // Distinct set of every commenter on this post (single scan).
+    for (const c of p.comments.values()) {
+      if (c.userId) ids.add(c.userId);
+    }
+    return [...ids];
   },
 
   async deleteQAPost(postId, ownerUserId) {
@@ -323,6 +405,7 @@ const fsImpl = {
       authorName: authorName || null,
       authorAvatar: authorAvatar || null,
       likes: 0,
+      likedBy: [],
       createdAt: new Date().toISOString(),
     });
     return ref.id;
@@ -342,11 +425,12 @@ const fsImpl = {
         authorName: authorName || null,
         authorAvatar: authorAvatar || null,
         likes: 0,
+        likedBy: [],
         createdAt: new Date().toISOString(),
       });
     return ref.id;
   },
-  async likeQAContribution(postId, contributionId) {
+  async likeQAContribution(postId, contributionId, userId) {
     const ref = db
       .collection('qaPosts')
       .doc(String(postId))
@@ -355,10 +439,45 @@ const fsImpl = {
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return null;
-      const likes = (snap.data().likes || 0) + 1;
-      tx.update(ref, { likes });
-      return { likes, userId: snap.data().userId };
+      const data = snap.data();
+      const likedBy = data.likedBy || [];
+      const wasLiked = likedBy.includes(userId);
+      const updated = wasLiked
+        ? likedBy.filter((u) => String(u) !== String(userId))
+        : [...likedBy, userId];
+      tx.update(ref, { likedBy: updated, likes: updated.length });
+      return { likes: updated.length, likedByMe: !wasLiked, userId: data.userId };
     });
+  },
+  async likeQAQuestion(postId, userId) {
+    const ref = db.collection('qaPosts').doc(String(postId));
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return null;
+      const data = snap.data();
+      const likedBy = data.likedBy || [];
+      const wasLiked = likedBy.includes(userId);
+      const updated = wasLiked
+        ? likedBy.filter((u) => String(u) !== String(userId))
+        : [...likedBy, userId];
+      tx.update(ref, { likedBy: updated, likes: updated.length });
+      return { likes: updated.length, likedByMe: !wasLiked, ownerUserId: data.ownerUserId };
+    });
+  },
+  async getQAParticipantUserIds(postId) {
+    const ref = db.collection('qaPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return [];
+    const ids = new Set();
+    const data = snap.data();
+    if (data.ownerUserId) ids.add(data.ownerUserId);
+    // Single sub-collection scan for every prior answerer.
+    const contribsSnap = await ref.collection('contributions').get();
+    for (const doc of contribsSnap.docs) {
+      const c = doc.data();
+      if (c.userId) ids.add(c.userId);
+    }
+    return [...ids];
   },
 
   async registerCommunityPost(postId, ownerUserId, meta = {}) {
@@ -407,6 +526,55 @@ const fsImpl = {
       .doc(String(commentId))
       .get();
     return snap.exists ? snap.data() : null;
+  },
+  async likeCommunityPost(postId, userId) {
+    const ref = db.collection('communityPosts').doc(String(postId));
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return null;
+      const data = snap.data();
+      const likedBy = data.likedBy || [];
+      const wasLiked = likedBy.includes(userId);
+      const updated = wasLiked
+        ? likedBy.filter((u) => String(u) !== String(userId))
+        : [...likedBy, userId];
+      tx.update(ref, { likedBy: updated, likes: updated.length });
+      return { likes: updated.length, likedByMe: !wasLiked, ownerUserId: data.ownerUserId };
+    });
+  },
+  async likeCommunityComment(postId, commentId, userId) {
+    const ref = db
+      .collection('communityPosts')
+      .doc(String(postId))
+      .collection('comments')
+      .doc(String(commentId));
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return null;
+      const data = snap.data();
+      const likedBy = data.likedBy || [];
+      const wasLiked = likedBy.includes(userId);
+      const updated = wasLiked
+        ? likedBy.filter((u) => String(u) !== String(userId))
+        : [...likedBy, userId];
+      tx.update(ref, { likedBy: updated, likes: updated.length });
+      return { likes: updated.length, likedByMe: !wasLiked, userId: data.userId };
+    });
+  },
+  async getCommunityParticipantUserIds(postId) {
+    const ref = db.collection('communityPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return [];
+    const ids = new Set();
+    const data = snap.data();
+    if (data.ownerUserId) ids.add(data.ownerUserId);
+    // Single sub-collection scan for every prior commenter.
+    const commentsSnap = await ref.collection('comments').get();
+    for (const doc of commentsSnap.docs) {
+      const c = doc.data();
+      if (c.userId) ids.add(c.userId);
+    }
+    return [...ids];
   },
   async listQAPosts(limit = 50) {
     const snap = await db
@@ -550,13 +718,18 @@ module.exports = {
   createQAPost: (...args) => impl().createQAPost(...args),
   getQAPost: (...args) => impl().getQAPost(...args),
   addQAContribution: (...args) => impl().addQAContribution(...args),
-  likeQAContribution: (...args) => impl().likeQAContribution(...args),
+    likeQAContribution: (...args) => impl().likeQAContribution(...args),
+  likeQAQuestion: (...args) => impl().likeQAQuestion(...args),
+  getQAParticipantUserIds: (...args) => impl().getQAParticipantUserIds(...args),
   deleteQAPost: (...args) => impl().deleteQAPost(...args),
   deleteQAContribution: (...args) => impl().deleteQAContribution(...args),
   registerCommunityPost: (...args) => impl().registerCommunityPost(...args),
   getCommunityPost: (...args) => impl().getCommunityPost(...args),
-  setCommunityComment: (...args) => impl().setCommunityComment(...args),
+    setCommunityComment: (...args) => impl().setCommunityComment(...args),
   getCommunityComment: (...args) => impl().getCommunityComment(...args),
+  likeCommunityPost: (...args) => impl().likeCommunityPost(...args),
+  likeCommunityComment: (...args) => impl().likeCommunityComment(...args),
+  getCommunityParticipantUserIds: (...args) => impl().getCommunityParticipantUserIds(...args),
   deleteCommunityPost: (...args) => impl().deleteCommunityPost(...args),
   deleteCommunityComment: (...args) => impl().deleteCommunityComment(...args),
   listQAPosts: (...args) => impl().listQAPosts(...args),

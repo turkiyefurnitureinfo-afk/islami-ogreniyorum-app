@@ -1619,6 +1619,21 @@ const [profileDirectory, setProfileDirectory] = useState({});
     }
   }, [activeTab, signedIn]);
 
+  // Near-real-time feed sync: poll every 10s while on a feed tab so that posts
+  // other users delete or edit vanish/appear without a manual pull-to-refresh.
+  // We reset the 60s throttle each tick so the poll actually hits the server.
+  const syncFeedsRef = React.useRef(syncFeeds);
+  syncFeedsRef.current = syncFeeds; // always point at the latest closure
+  useEffect(() => {
+    if (!signedIn) return;
+    if (activeTab !== 'qa' && activeTab !== 'community') return;
+    const id = setInterval(() => {
+      lastFeedSyncRef.current = 0; // reset throttle so the next call actually runs
+      syncFeedsRef.current(false);
+    }, 10000);
+    return () => clearInterval(id);
+  }, [signedIn, activeTab]);
+
   // ---------- Moderation: report content / block authors ----------
   // Play requires a working report path for UGC. Reports are stored
   // server-side; blocking hides an author's content locally.
@@ -1734,6 +1749,19 @@ const [profileDirectory, setProfileDirectory] = useState({});
       ),
     [communityPosts, blockedUsers, resolveProfile]
   );
+
+  // ---------- Refresh handler (pull-to-refresh) ----------
+  // Forces an immediate re-sync of both QA and community feeds. Used by the
+  // pull-to-refresh gesture on CommunityTab so users can always force the
+  // latest server state even when auto-polling is throttled.
+  const handleManualRefresh = React.useCallback(async () => {
+    if (!signedIn) return;
+    try {
+      await syncFeeds(true);
+    } catch {
+      // Best-effort; ignore failures.
+    }
+  }, [signedIn, syncFeeds]);
 
   // ---------- Community Handlers ----------
 
@@ -2050,6 +2078,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
             handleEditComment={handleEditComment}
             handleDeleteComment={handleDeleteComment}
             onReport={handleReportContent}
+            onRefresh={handleManualRefresh}
           />
         )}
         {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} profilePicture={profilePicture} setProfilePicture={setProfilePicture} />}

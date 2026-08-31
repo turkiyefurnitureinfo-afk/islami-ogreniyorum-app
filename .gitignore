@@ -23,13 +23,18 @@ service-account-key.json
 dist/
 *.log
 server/build-log.txt
+*.apk
+server/*.log
 
 # Native projects are generated fresh by EAS (continuous native generation)
 # on every build. Keeping them out of git avoids stale native config that
 # breaks cloud Gradle builds when node_modules versions change.
 android/
 ios/
-# Scratch run logs
+
+# Backup / scratch files (never commit)
+*.bak
+render.yaml.bak
 server/t-out.txt
 server/t-err.txt
 dist-verify/
