@@ -45,7 +45,7 @@ for (let i = 0; i < N; i++) {
   data.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
 }
 
-const outDir = path.join(__dirname, 'android', 'app', 'src', 'main', 'res', 'raw');
+const outDir = path.join(__dirname, 'assets', 'sounds');
 fs.mkdirSync(outDir, { recursive: true });
 const outPath = path.join(outDir, 'notification_high.wav');
 fs.writeFileSync(outPath, data);

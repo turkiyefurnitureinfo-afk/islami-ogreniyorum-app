@@ -118,6 +118,7 @@ const memPosts = new Map();     // postId -> { ownerUserId }
 const memContribs = new Map();  // "postId:contribId" -> { userId, likes }
 const memCommunity = new Map(); // postId -> { ownerUserId, comments: Map(commentId -> {userId}) }
 const memReports = [];          // moderation queue
+const memUsers = new Map();     // email -> account profile backup
 let memNextPostId = 1;
 let memNextContribId = 1;
 
@@ -136,12 +137,13 @@ const memImpl = {
     return [...memDevices.entries()].map(([userId, d]) => ({ userId, ...d }));
   },
 
-  async createQAPost(ownerUserId, question, authorName) {
+  async createQAPost(ownerUserId, question, authorName, authorAvatar) {
     const postId = String(memNextPostId++);
     memPosts.set(postId, {
       ownerUserId,
       question,
       authorName: authorName || null,
+      authorAvatar: authorAvatar || null,
       likes: 0,
       createdAt: new Date().toISOString(),
     });
@@ -151,12 +153,13 @@ const memImpl = {
     const p = memPosts.get(String(postId));
     return p ? { ...p } : null;
   },
-  async addQAContribution(postId, userId, text, authorName) {
+  async addQAContribution(postId, userId, text, authorName, authorAvatar) {
     const contributionId = String(memNextContribId++);
     memContribs.set(`${postId}:${contributionId}`, {
       userId,
       text,
       authorName: authorName || null,
+      authorAvatar: authorAvatar || null,
       likes: 0,
       createdAt: new Date().toISOString(),
     });
@@ -175,6 +178,9 @@ const memImpl = {
       const contributions = [...memContribs.entries()]
         .filter(([k]) => k.startsWith(`${id}:`))
         .map(([k, c]) => ({ id: k.split(':')[1], ...c }))
+        // Never expose the AI pseudo-user's answers in the public shared feed
+        // — each question's AI answer is private to the asking user only.
+        .filter((c) => c.userId !== 'ai@islamiogreniyorum.app')
         .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
       return { id, ...p, contributions };
     });
@@ -185,6 +191,7 @@ const memImpl = {
       ownerUserId,
       text: meta.text || '',
       authorName: meta.authorName || null,
+      authorAvatar: meta.authorAvatar || null,
       mediaType: meta.mediaType || null,
       mediaUri: meta.mediaUri || null,
       createdAt: meta.createdAt || new Date().toISOString(),
@@ -202,6 +209,7 @@ const memImpl = {
       userId,
       text: meta.text || '',
       authorName: meta.authorName || null,
+      authorAvatar: meta.authorAvatar || null,
       createdAt: new Date().toISOString(),
     });
   },
@@ -219,11 +227,54 @@ const memImpl = {
         ownerUserId: p.ownerUserId,
         text: p.text,
         authorName: p.authorName,
+        authorAvatar: p.authorAvatar || null,
         mediaType: p.mediaType,
         mediaUri: p.mediaUri,
         createdAt: p.createdAt,
         comments: [...p.comments.entries()].map(([cid, c]) => ({ id: cid, ...c })),
       }));
+  },
+
+  async deleteQAPost(postId, ownerUserId) {
+    const key = String(postId);
+    const p = memPosts.get(key);
+    if (!p) return false;
+    // Only the owner may delete the thread.
+    if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
+    // Remove the thread and every contribution under it.
+    memPosts.delete(key);
+    for (const k of [...memContribs.keys()]) {
+      if (k.startsWith(`${key}:`)) memContribs.delete(k);
+    }
+    return true;
+  },
+  async deleteQAContribution(postId, contributionId, userId) {
+    const key = `${String(postId)}:${String(contributionId)}`;
+    const c = memContribs.get(key);
+    if (!c) return false;
+    // Only the contribution's author (or the AI pseudo-user) may delete it.
+    if (userId && c.userId && c.userId !== userId && c.userId !== 'ai@islamiogreniyorum.app') return false;
+    memContribs.delete(key);
+    return true;
+  },
+  async deleteCommunityPost(postId, ownerUserId) {
+    const key = String(postId);
+    const p = memCommunity.get(key);
+    if (!p) return false;
+    // Only the owner may delete the post.
+    if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
+    memCommunity.delete(key);
+    return true;
+  },
+  async deleteCommunityComment(postId, commentId, userId) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return false;
+    const c = p.comments.get(String(commentId));
+    if (!c) return false;
+    // Only the comment's author may delete it.
+    if (userId && c.userId && c.userId !== userId) return false;
+    p.comments.delete(String(commentId));
+    return true;
   },
 
   async counts() {
@@ -233,6 +284,18 @@ const memImpl = {
   async addReport(report) {
     memReports.push({ ...report, createdAt: new Date().toISOString() });
     return true;
+  },
+
+  async getUser(id) {
+    const u = memUsers.get(String(id));
+    return u ? { ...u } : null;
+  },
+  async setUser(user) {
+    memUsers.set(String(user.id), { ...user });
+    return { ...user };
+  },
+  async deleteUser(id) {
+    memUsers.delete(String(id));
   },
 };
 
@@ -253,11 +316,12 @@ const fsImpl = {
     return snap.docs.map((doc) => ({ userId: doc.id, ...doc.data() }));
   },
 
-  async createQAPost(ownerUserId, question, authorName) {
+  async createQAPost(ownerUserId, question, authorName, authorAvatar) {
     const ref = await db.collection('qaPosts').add({
       ownerUserId,
       question,
       authorName: authorName || null,
+      authorAvatar: authorAvatar || null,
       likes: 0,
       createdAt: new Date().toISOString(),
     });
@@ -267,7 +331,7 @@ const fsImpl = {
     const snap = await db.collection('qaPosts').doc(String(postId)).get();
     return snap.exists ? snap.data() : null;
   },
-  async addQAContribution(postId, userId, text, authorName) {
+  async addQAContribution(postId, userId, text, authorName, authorAvatar) {
     const ref = await db
       .collection('qaPosts')
       .doc(String(postId))
@@ -276,6 +340,7 @@ const fsImpl = {
         userId,
         text,
         authorName: authorName || null,
+        authorAvatar: authorAvatar || null,
         likes: 0,
         createdAt: new Date().toISOString(),
       });
@@ -305,6 +370,7 @@ const fsImpl = {
           ownerUserId,
           text: meta.text || '',
           authorName: meta.authorName || null,
+          authorAvatar: meta.authorAvatar || null,
           mediaType: meta.mediaType || null,
           mediaUri: meta.mediaUri || null,
           createdAt: meta.createdAt || new Date().toISOString(),
@@ -327,6 +393,7 @@ const fsImpl = {
           userId,
           text: meta.text || '',
           authorName: meta.authorName || null,
+          authorAvatar: meta.authorAvatar || null,
           createdAt: new Date().toISOString(),
         },
         { merge: true }
@@ -352,6 +419,9 @@ const fsImpl = {
       const cSnap = await doc.ref.collection('contributions').get();
       const contributions = cSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
+        // Never expose the AI pseudo-user's answers in the public shared feed
+        // — each question's AI answer is private to the asking user only.
+        .filter((c) => c.userId !== 'ai@islamiogreniyorum.app')
         .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
       out.push({ id: doc.id, ...doc.data(), contributions });
     }
@@ -370,6 +440,59 @@ const fsImpl = {
       out.push({ id: doc.id, ...doc.data(), comments });
     }
     return out;
+  },
+
+  async deleteQAPost(postId, ownerUserId) {
+    const ref = db.collection('qaPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the owner may delete the thread.
+    if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
+    // Remove every contribution sub-document first, then the thread itself.
+    const contribs = await ref.collection('contributions').get();
+    await Promise.all(contribs.docs.map((doc) => doc.ref.delete()));
+    await ref.delete();
+    return true;
+  },
+  async deleteQAContribution(postId, contributionId, userId) {
+    const ref = db
+      .collection('qaPosts')
+      .doc(String(postId))
+      .collection('contributions')
+      .doc(String(contributionId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the contribution's author (or the AI pseudo-user) may delete it.
+    if (userId && snap.data().userId && snap.data().userId !== userId && snap.data().userId !== 'ai@islamiogreniyorum.app') {
+      return false;
+    }
+    await ref.delete();
+    return true;
+  },
+  async deleteCommunityPost(postId, ownerUserId) {
+    const ref = db.collection('communityPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the owner may delete the post.
+    if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
+    // Remove every comment sub-document first, then the post itself.
+    const comments = await ref.collection('comments').get();
+    await Promise.all(comments.docs.map((doc) => doc.ref.delete()));
+    await ref.delete();
+    return true;
+  },
+  async deleteCommunityComment(postId, commentId, userId) {
+    const ref = db
+      .collection('communityPosts')
+      .doc(String(postId))
+      .collection('comments')
+      .doc(String(commentId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the comment's author may delete it.
+    if (userId && snap.data().userId && snap.data().userId !== userId) return false;
+    await ref.delete();
+    return true;
   },
 
   async counts() {
@@ -393,6 +516,21 @@ const fsImpl = {
     });
     return true;
   },
+
+  async getUser(id) {
+    const snap = await db.collection('users').doc(String(id)).get();
+    return snap.exists ? snap.data() : null;
+  },
+  async setUser(user) {
+    await db
+      .collection('users')
+      .doc(String(user.id))
+      .set({ ...user }, { merge: true });
+    return { ...user };
+  },
+  async deleteUser(id) {
+    await db.collection('users').doc(String(id)).delete();
+  },
 };
 
 /* ------------------------------ Dispatchers ------------------------------ */
@@ -413,12 +551,19 @@ module.exports = {
   getQAPost: (...args) => impl().getQAPost(...args),
   addQAContribution: (...args) => impl().addQAContribution(...args),
   likeQAContribution: (...args) => impl().likeQAContribution(...args),
+  deleteQAPost: (...args) => impl().deleteQAPost(...args),
+  deleteQAContribution: (...args) => impl().deleteQAContribution(...args),
   registerCommunityPost: (...args) => impl().registerCommunityPost(...args),
   getCommunityPost: (...args) => impl().getCommunityPost(...args),
   setCommunityComment: (...args) => impl().setCommunityComment(...args),
   getCommunityComment: (...args) => impl().getCommunityComment(...args),
+  deleteCommunityPost: (...args) => impl().deleteCommunityPost(...args),
+  deleteCommunityComment: (...args) => impl().deleteCommunityComment(...args),
   listQAPosts: (...args) => impl().listQAPosts(...args),
   listCommunityPosts: (...args) => impl().listCommunityPosts(...args),
   addReport: (...args) => impl().addReport(...args),
   counts: (...args) => impl().counts(...args),
+  getUser: (...args) => impl().getUser(...args),
+  setUser: (...args) => impl().setUser(...args),
+  deleteUser: (...args) => impl().deleteUser(...args),
 };

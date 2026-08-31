@@ -65,8 +65,8 @@ or line breaks, the encoding was wrong — do not use it.
 3. Add each variable and mark it a secret (values are hidden with dots):
 
    - `GOOGLE_APPLICATION_CREDENTIALS_JSON`  = the base64 string from Step 3
-   - `EXPO_ACCESS_TOKEN`                     = `iTdkI7shfdyG46XOXe65hplqsinoKFCnnJjxZwG-`
-   - `GEMINI_API_KEY`                        = `AQ.Ab8RN6KUtDdSGZYM5pwQ46arGDNs5_8z-0TaotyGXD9AjP2SWVA`
+   - `EXPO_ACCESS_TOKEN`                     = `PASTE_YOUR_EXPO_ACCESS_TOKEN_HERE`
+   - `GEMINI_API_KEY`                        = `PASTE_YOUR_GEMINI_API_KEY_HERE`
 
    Double-check the name is exactly `GOOGLE_APPLICATION_CREDENTIALS_JSON`
    (the `_JSON` suffix matters — it is the "contents", not the file-path version).

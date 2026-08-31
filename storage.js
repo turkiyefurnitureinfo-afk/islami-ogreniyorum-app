@@ -1,26 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import bcrypt from 'bcryptjs';
-
-// Number of bcrypt rounds (balances security vs login speed on mobile)
-const BCRYPT_ROUNDS = 10;
-
-/**
- * Hash a plaintext password before storage.
- * Google / magic-link users pass null — returned as-is.
- */
-export async function hashPassword(password) {
-  if (!password) return null;
-  return await bcrypt.hash(password, BCRYPT_ROUNDS);
-}
-
-/**
- * Verify a plaintext password against the stored hash.
- * Returns false if either value is empty.
- */
-export async function verifyPassword(password, hash) {
-  if (!password || !hash) return false;
-  return await bcrypt.compare(password, hash);
-}
 
 // Storage keys
 const KEYS = {
@@ -30,6 +8,8 @@ const KEYS = {
   WELCOME_SHOWN: '@app/welcome_shown',
   QANDA: '@app/qanda',
   COMMUNITY: '@app/community',
+  DELETED_ITEMS: '@app/deleted_items',
+  PROFILE_DIRECTORY: '@app/profile_directory',
 };
 
 /**
@@ -90,6 +70,83 @@ export async function loadProfile() {
   } catch (error) {
     console.error('Failed to load profile:', error);
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-email profile storage — occupation / address / bio / picture are kept
+// under "@app/profile:<email>" so multiple accounts on one device each get
+// their own profile (the legacy single-key PROFILE remains as a fallback for
+// data written by older builds).
+// ---------------------------------------------------------------------------
+
+const profileKeyFor = (email) => `${KEYS.PROFILE}:${String(email || '').trim().toLowerCase()}`;
+
+/**
+ * Save profile setup data for a specific account email.
+ * @param {string} email - the account's email (storage key)
+ * @param {object} profile - { occupation, address, bio, profilePicture }
+ */
+export async function saveProfileForEmail(email, profile) {
+  try {
+    await AsyncStorage.setItem(profileKeyFor(email), JSON.stringify(profile || {}));
+  } catch (error) {
+    console.error('Failed to save profile for email:', error);
+  }
+}
+
+/**
+ * Load profile setup data for a specific account email. Falls back to the
+ * legacy single-profile record when no per-email entry exists yet (migration).
+ * @param {string} email - the account's email (storage key)
+ * @returns {Promise<object|null>}
+ */
+export async function loadProfileForEmail(email) {
+  try {
+    const raw = await AsyncStorage.getItem(profileKeyFor(email));
+    if (raw) return JSON.parse(raw);
+    // Migration: return the legacy profile (if any) without removing it.
+    return await loadProfile();
+  } catch (error) {
+    console.error('Failed to load profile for email:', error);
+    return null;
+  }
+}
+
+/**
+ * Profile directory — the best-known profile (name + picture) per email.
+ *
+ * Used so the community feed shows the user's CURRENT profile picture, not the
+ * one embedded in their (older) posts. Entries are refreshed from the backend
+ * after feed syncs; the signed-in user's own entry always comes live from
+ * account state, so their edits reflect instantly everywhere.
+ *
+ * Shape: { [email]: { fullName: string, profilePicture: string, fetchedAt: ISO } }
+ */
+
+/**
+ * Save the profile directory.
+ * @param {Record<string, {fullName?: string, profilePicture?: string, fetchedAt?: string}>} dir
+ */
+export async function saveProfileDirectory(dir) {
+  try {
+    await AsyncStorage.setItem(KEYS.PROFILE_DIRECTORY, JSON.stringify(dir || {}));
+  } catch (error) {
+    console.error('Failed to save profile directory:', error);
+  }
+}
+
+/**
+ * Load the profile directory.
+ * @returns {Promise<Record<string, {fullName?: string, profilePicture?: string, fetchedAt?: string}>>}
+ */
+export async function loadProfileDirectory() {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.PROFILE_DIRECTORY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Failed to load profile directory:', error);
+    return {};
   }
 }
 
@@ -194,6 +251,32 @@ export async function loadCommunityPosts() {
 }
 
 /**
+ * Save deleted item IDs so deletions survive app restarts.
+ * @param {Set<string>} deletedIds
+ */
+export async function saveDeletedItems(deletedIds) {
+  try {
+    await AsyncStorage.setItem(KEYS.DELETED_ITEMS, JSON.stringify([...deletedIds]));
+  } catch (error) {
+    console.error('Failed to save deleted items:', error);
+  }
+}
+
+/**
+ * Load deleted item IDs.
+ * @returns {Promise<Set<string>>}
+ */
+export async function loadDeletedItems() {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.DELETED_ITEMS);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (error) {
+    console.error('Failed to load deleted items:', error);
+    return new Set();
+  }
+}
+
+/**
  * Clear all app data (used for account deletion).
  */
 export async function clearAllData() {
@@ -205,6 +288,8 @@ export async function clearAllData() {
       KEYS.WELCOME_SHOWN,
       KEYS.QANDA,
       KEYS.COMMUNITY,
+      KEYS.DELETED_ITEMS,
+      KEYS.PROFILE_DIRECTORY,
     ]);
   } catch (error) {
     console.error('Failed to clear all data:', error);

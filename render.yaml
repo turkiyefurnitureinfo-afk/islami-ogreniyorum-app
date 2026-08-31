@@ -32,8 +32,4 @@ services:
       - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
         sync: false
       - key: GEMINI_API_KEY
-        sync: false
-      - key: GOOGLE_API_KEY
-        sync: false
-      - key: GOOGLE_CX
-        sync: false
+        # The ONLY AI provider for Q&A answers (Google Programmable Search was removed).

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
+import { TranslateButton } from './useTranslate.js';
+import { useCachedAvatar } from './avatarCache.js';
 
 /** Single post video player (hook requires its own component instance). */
 function PostVideo({ uri, style }) {
@@ -20,20 +22,57 @@ function PostVideo({ uri, style }) {
   );
 }
 
+/**
+ * Avatar that renders from the on-disk cache first (works offline). The emoji
+ * fallback only appears when the user genuinely has no profile picture. When a
+ * URL exists but can't load (e.g. offline + uncached), a neutral placeholder
+ * shows instead of a broken image or the emoji.
+ */
+function AvatarImage({ url, fallback, style }) {
+  const cached = useCachedAvatar(url);
+  const src = cached || url;
+  const [errored, setErrored] = useState(false);
+  if (src) {
+    // Reset error flag when the source changes so a new URL gets a fresh attempt.
+    if (errored) setErrored(false);
+    return (
+      <Image
+        source={{ uri: src }}
+        style={style}
+        onError={() => setErrored(true)}
+      />
+    );
+  }
+  // No source at all (genuinely no avatar) → emoji fallback.
+  if (!url) {
+    return <Text style={style}>{fallback}</Text>;
+  }
+  // URL exists but the image failed to load (offline + uncached) → neutral
+  // placeholder, NOT the emoji. The emoji is reserved for "no picture at all".
+  return (
+    <View style={style}>
+      <Text style={{ fontSize: 16, opacity: 0.4 }}>👤</Text>
+    </View>
+  );
+}
+
 const CommunityTab = ({
   styles,
   palette,
   t,
+  language,
   communityPosts,
   newPostText,
   setNewPostText,
   handleCreatePost,
+  sharingPost,
   handleLikePost,
   handleLikeComment,
   newComment,
   setNewComment,
   handlePostComment,
   account,
+  profilePicture,
   handleEditPost,
   handleDeletePost,
   handleEditComment,
@@ -138,8 +177,7 @@ const CommunityTab = ({
   };
 
   const handleShare = () => {
-    handleCreatePost(media);
-    setMedia(null);
+    handleCreatePost(media).finally(() => setMedia(null));
   };
 
   // Moderation: hand the item up to App's confirm dialog (report / block).
@@ -198,8 +236,19 @@ const CommunityTab = ({
           </View>
         )}
 
-        <Pressable style={styles.communityShareButton} onPress={handleShare}>
-          <Text style={styles.communityShareButtonText}>{t?.sharePost || 'Share Post'}</Text>
+        <Pressable
+          style={[styles.communityShareButton, sharingPost && styles.disabledButton]}
+          onPress={handleShare}
+          disabled={sharingPost}
+        >
+          {sharingPost ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <ActivityIndicator size="small" color="#08131a" style={{ marginRight: 8 }} />
+              <Text style={styles.communityShareButtonText}>{t?.sharingPost || 'Sharing...'}</Text>
+            </View>
+          ) : (
+            <Text style={styles.communityShareButtonText}>{t?.sharePost || 'Share Post'}</Text>
+          )}
         </Pressable>
       </View>
 
@@ -214,7 +263,11 @@ const CommunityTab = ({
       {communityPosts.map((post) => (
         <View key={post.id} style={styles.card}>
           <View style={styles.postHeader}>
-            <Text style={styles.avatar}>{post.user.avatar}</Text>
+            <AvatarImage
+              url={post.user.avatarUrl}
+              fallback={post.user.avatar}
+              style={[styles.avatar, styles.communityAvatarImage]}
+            />
             <View style={{ flex: 1 }}>
               <Text style={styles.postUser}>{post.user.name}</Text>
               <Text style={styles.postTime}>{post.timestamp}</Text>
@@ -228,6 +281,7 @@ const CommunityTab = ({
           </View>
 
           <Text style={styles.communityPostText}>{post.text}</Text>
+          <TranslateButton text={post.text} t={t} uiLang={language} />
 
           {renderOwnerControls(
             'p-' + post.id,
@@ -268,7 +322,11 @@ const CommunityTab = ({
               post.comments.map((comment) => (
                 <View key={comment.id} style={styles.communityCommentItem}>
                   <View style={styles.communityCommentHeader}>
-                    <Text style={styles.communityCommentAvatar}>{comment.user.avatar}</Text>
+                    <AvatarImage
+                      url={comment.user.avatarUrl}
+                      fallback={comment.user.avatar}
+                      style={[styles.communityCommentAvatar, styles.communityAvatarImageSmall]}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.communityCommentUser}>{comment.user.name}</Text>
                       <Text style={styles.communityCommentTime}>{comment.timestamp}</Text>
@@ -278,6 +336,7 @@ const CommunityTab = ({
                     </Pressable>
                   </View>
                   <Text style={styles.communityCommentText}>{comment.text}</Text>
+                  <TranslateButton text={comment.text} t={t} uiLang={language} />
                   <View style={styles.communityCommentFooter}>
                     <Text style={styles.communityCommentTime}>{comment.timestamp}</Text>
                     <Pressable onPress={() => handleLikeComment(post.id, comment.id)}>

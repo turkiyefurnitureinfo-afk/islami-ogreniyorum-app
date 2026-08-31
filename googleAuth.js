@@ -1,56 +1,50 @@
 import * as AuthSession from 'expo-auth-session';
 import { Platform } from 'react-native';
+import {
+  GOOGLE_ANDROID_CLIENT_ID,
+  GOOGLE_ANDROID_CLIENT_ID_EAS,
+  GOOGLE_ANDROID_CLIENT_ID_RELEASE,
+  GOOGLE_WEB_CLIENT_ID,
+} from './config.js';
 
 // Google OAuth configuration
 // ============================================================
-// HOW TO CREATE THE CORRECT OAUTH CLIENT (Google Cloud Console)
-// https://console.cloud.google.com/apis/credentials
+// HOW THE CLIENT IDs WORK (Google Cloud Console -> APIs & Services ->
+// Credentials, project "islami-ogreniyorum" 817195380589):
 //
-// IMPORTANT: An installed APK must use an **Android** OAuth client,
-// NOT the "Web application" client. Google rejects custom app
-// schemes like com.joshua.islamiogreniyorum://... on Web clients
-// with "Error 400: invalid_request". An Android client is instead
-// validated by package name + SHA-1 certificate fingerprint.
+// An installed APK must use an **Android**-type OAuth client, NOT a
+// "Web application" client. Android clients are validated by
+// package name + SHA-1 certificate fingerprint -- not by redirect URLs.
 //
-// STEP-BY-STEP:
-// 1. APIs & Services -> OAuth consent screen:
-//       - User type: External
-//       - Under "Test users", ADD YOUR OWN GMAIL ADDRESS
-//         (required while the app status is "Testing").
-// 2. Credentials -> Create Credentials -> OAuth client ID
-//       - Application type: **Android**
-//       - Package name:  com.joshua.islamiogreniyorum
-//         (must EXACTLY match "android.package" in app.json)
-//       - SHA-1 certificate fingerprint: the SHA-1 of the key
-//         that signed the APK you installed. Get it with either:
-//           npx eas credentials -p android
-//             (choose profile -> "view keystore" -> copy SHA-1)
-//           or, directly from the downloaded APK file:
-//             keytool -printcert -jarfile your-app.apk
-//         If you ever build locally with gradlew (debug keystore),
-//         ALSO add its SHA-1:
-//           keytool -list -v -keystore android\app\debug.keystore ^
-//                   -alias androiddebugkey -storepass android
-//         (You can add more fingerprints later by editing the client.)
-// 3. Copy the client ID from the row whose type badge says "Android"
-//    -- NOT your original Web client! Both IDs start with the same
-//    project number (984514648281-) but have DIFFERENT suffixes.
-// 4. REBUILD the APK -- the client ID is compiled into the JS bundle:
-//       npm run build:preview   (or npm run build:android)
-// 5. Keep the existing Web client for the backend / website.
+// KEYSTORES ON THIS MACHINE (verify with:
+//   "C:\ASDK\jdk-17.0.20.1+1\bin\keytool.exe" -list -v
+//     -keystore android\app\<file> -alias <alias> -storepass <pass>):
+//   1. my-upload-key.keystore (alias my-key-alias) -- signs release/preview
+//      APKs built with gradlew.
+//      SHA-1   6E:8E:23:CA:DF:BD:11:4F:93:65:ED:ED:52:89:FC:74:5A:FB:CE:17
+//      SHA-256 06:48:32:89:81:78:DC:3D:53:AE:7B:0D:D7:AD:B6:4B:F2:BE:74:8C:
+//              5C:A1:91:32:F9:FC:3E:93:C8:46:A5:0E
+//   2. debug.keystore (alias androiddebugkey) -- debug builds.
+//      SHA-1   5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25
+//
+// REGISTERING THEM: Firebase Console -> Project Settings -> Your apps ->
+// Android app -> "Add fingerprint" (SHA-1 + SHA-256), for EACH keystore.
+// Firebase then auto-creates an Android OAuth client for it and offers a NEW
+// google-services.json whose "oauth_client" list contains that client's ID.
+// Download it, replace the repo-root google-services.json, and add any NEW
+// client_id to GOOGLE_ANDROID_CLIENT_ID_* in config.js so the chain below
+// picks it up. (The EAS/fallback client below covers the debug keystore.)
+//
+// TROUBLESHOOTING "Error 400: invalid_request":
+//   - The client ID must come from the SAME project as google-services.json.
+//   - The Android client's package name + SHA-1 must match the signing key of
+//     the installed build:
+//       keytool -printcert -jarfile your-app.apk
+//   - If the consent screen shows "access blocked": the app is still in
+//     "Testing" status -- add the Gmail address under "Test users".
 // ============================================================
-// Your OAuth client -- VERIFIED as type "Android" in Google Cloud Console:
-//   Application type : Android
-//   Package name     : com.joshua.islamiogreniyorum  (must match app.json)
-//   SHA-1            : 8D:FC:3D:55:BE:27:5D:81:A1:77:06:4C:93:21:F9:1D:04:B4:49:21
-// Reusing the same ID as the Web constant below is FINE for the APK:
-// Android-type clients are validated by package name + SHA-1, not URLs.
-const GOOGLE_ANDROID_CLIENT_ID = '984514648281-8buojdur5e8ne7jl0f16d6nntj67e2i7.apps.googleusercontent.com';
-// Optional: create an iOS client the same way (bundle id
-// com.joshua.islamiogreniyorum) and paste it here before an iOS build.
+
 const GOOGLE_IOS_CLIENT_ID = '';
-// Web-application client (used for web / backend flows only).
-const GOOGLE_WEB_CLIENT_ID = '984514648281-8buojdur5e8ne7jl0f16d6nntj67e2i7.apps.googleusercontent.com';
 
 // Google OAuth endpoints
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -69,9 +63,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-// True once a real client ID is in GOOGLE_ANDROID_CLIENT_ID (placeholder
-// removed). The Android ID may legitimately equal the Web ID -- an
-// "Android"-type client is validated by package name + SHA-1, not URLs.
+// True once a real (project-matching) Android client ID is configured.
 function isAndroidClientConfigured() {
   return Boolean(
     GOOGLE_ANDROID_CLIENT_ID &&
@@ -79,8 +71,21 @@ function isAndroidClientConfigured() {
   );
 }
 
+// Ordered list of Android OAuth clients to try. The release-keystore client
+// (filled in config.js after registering fingerprints in Firebase) comes
+// first, then the debug-keystore client, then the earlier EAS keystore.
+// Trying every registered client makes sign-in work no matter which keystore
+// signed the installed APK — the first one whose SHA-1 matches succeeds.
+function getAndroidClientIds() {
+  return [
+    GOOGLE_ANDROID_CLIENT_ID_RELEASE,
+    GOOGLE_ANDROID_CLIENT_ID,
+    GOOGLE_ANDROID_CLIENT_ID_EAS,
+  ].filter((id) => id && id.length > 20 && !id.startsWith('PASTE-'));
+}
+
 // Select the right OAuth client ID for the platform.
-// - Android APKs use the Android-type client (validated by
+// - Android APKs use the Android-type clients (validated by
 //   package name + SHA-1 in Google Cloud Console).
 // - iOS uses the iOS client ID when available.
 // - Web keeps the Web-application client ID.
@@ -107,100 +112,173 @@ function getRedirectUri() {
 }
 
 /**
+ * Convert a failed/cancelled promptAsync result into a helpful message.
+ * Surfaces Google's REAL reason (invalid_request, access_denied,
+ * redirect_uri_mismatch...) instead of just "cancelled".
+ */
+function describeGoogleFailure(result, language = 'tr') {
+  const failed = /** @type {any} */ (result);
+  const googleError =
+    (failed?.params && (failed.params.error || failed.params.error_description)) ||
+    (failed?.error && failed.error.message) ||
+    failed?.errorCode ||
+    '';
+  const text = String(googleError);
+  if (language === 'tr') {
+    if (text.includes('access_denied') || text.includes('blocked')) {
+      return (
+        'Google bu hesabı engelledi. OAuth onay ekranı "Testing" durumundayken, ' +
+        'Gmail adresinizin Google Cloud Console (APIs & Services → OAuth consent ' +
+        'screen) içinde "Test users" (Test kullanıcıları) listesine eklenmiş ' +
+        'olması gerekir.'
+      );
+    }
+    if (text.includes('invalid_request') || text.includes('invalid_client')) {
+      return (
+        'Hata 400: invalid_request. Bu derlemeye gömülü OAuth istemci kimliği, ' +
+        'kurulu APK ile eşleşmiyor. Google Cloud Console\'daki Android OAuth ' +
+        'istemcisinin paket adı olarak com.joshua.islamiogreniyorum ve bu derlemeyi ' +
+        'imzalayan keystore\'un SHA-1 imzasını kullandığından emin olun, sonra yeniden ' +
+        `derleyin. (Ham hatanız: ${text})`
+      );
+    }
+    if (text) return `Google girişi başarısız: ${text}`;
+    return 'Google girişi iptal edildi';
+  }
+  if (text.includes('access_denied') || text.includes('blocked')) {
+    return (
+      'Google blocked this account. While the OAuth consent screen is in ' +
+      '"Testing" status, your Gmail address must be listed under "Test users" ' +
+      'in Google Cloud Console (APIs & Services -> OAuth consent screen).'
+    );
+  }
+  if (text.includes('invalid_request') || text.includes('invalid_client')) {
+    return (
+      'Error 400: invalid_request. The OAuth client ID baked into this build ' +
+      'does not match the installed APK. Make sure the Android OAuth client in ' +
+      'Google Cloud Console uses package name com.joshua.islamiogreniyorum and ' +
+      "the SHA-1 of the keystore that signed this build, then rebuild. (Raw " +
+      `error: ${text})`
+    );
+  }
+  if (text) {
+    return `Google sign-in failed: ${text}`;
+  }
+  return 'Google sign-in was cancelled';
+}
+
+/** Run one OAuth attempt against a single Android client ID. */
+async function promptGoogleWithClient(clientId, language = 'tr') {
+  const authRequest = new AuthSession.AuthRequest({
+    clientId,
+    scopes: SCOPES,
+    redirectUri: getRedirectUri(),
+    // Implicit-style code flow WITHOUT PKCE. Google's Android OAuth clients
+    // do not accept PKCE parameters on the custom-scheme redirect flow and
+    // answering with "Error 400: invalid_request" -- omitting usePKCE (and the
+    // offline/consent extras) keeps the request exactly what the native
+    // flow expects. The code is still exchanged server-to-server below.
+    responseType: AuthSession.ResponseType.Code,
+    usePKCE: false,
+  });
+
+  const result = await authRequest.promptAsync(GOOGLE_DISCOVERY);
+  if (result.type !== 'success') {
+    throw new Error(describeGoogleFailure(result, language));
+  }
+
+  // Exchange the authorization code for tokens.
+  // NOTE: the body is built manually -- Hermes (React Native's JS engine)
+  // does NOT provide URLSearchParams, so using it would throw here.
+  const formBody = [
+    ['code', result.params.code],
+    ['client_id', clientId],
+    ['redirect_uri', getRedirectUri()],
+    ['grant_type', 'authorization_code'],
+  ]
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+
+  const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: formBody,
+  });
+  const tokens = await tokenResponse.json();
+  if (!tokens || !tokens.access_token) {
+    const reason = tokens?.error_description || tokens?.error || 'token exchange failed';
+    throw new Error(`Google sign-in failed: ${reason}`);
+  }
+
+  // Fetch the user's profile info
+  const userInfoResponse = await fetch(GOOGLE_USERINFO_ENDPOINT, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  });
+  const userInfo = await userInfoResponse.json();
+  if (!userInfo || (!userInfo.email && !userInfo.sub)) {
+    throw new Error('Google sign-in failed: could not read the Google profile');
+  }
+
+  return {
+    name: userInfo.name || '',
+    email: userInfo.email || '',
+    picture: userInfo.picture || '',
+  };
+}
+
+/**
  * Sign in with Google using OAuth 2.0.
  * Returns the user's profile information including profile picture.
  *
+ * On Android every registered Android-type client ID is tried in turn, so the
+ * flow works regardless of which keystore signed the installed APK.
+ *
  * @returns {Promise<{success: boolean, user?: {name: string, email: string, picture: string}, error?: string}>}
  */
-export async function signInWithGoogle() {
-  try {
-    const clientId = getClientId();
-
-    // Fail fast with a clear message if the Android client ID was never
-    // configured (otherwise Google answers with "Error 400: invalid_request").
-    if (Platform.OS === 'android' && !isAndroidClientConfigured()) {
-      return {
-        success: false,
-        error:
-          'Google sign-in is not configured for this build. In Google Cloud Console, open the OAuth client whose type is "Android" (NOT "Web"), copy its Client ID, paste it into GOOGLE_ANDROID_CLIENT_ID in googleAuth.js, and rebuild.',
-      };
-    }
-
-    // Build the auth request
-    const authRequest = new AuthSession.AuthRequest({
-      clientId,
-      scopes: SCOPES,
-      redirectUri: getRedirectUri(),
-      responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
-      extraParams: {
-        access_type: 'offline',
-        prompt: 'consent',
-      },
-    });
-
-    // Start the OAuth flow
-    const result = await authRequest.promptAsync(GOOGLE_DISCOVERY);
-
-    if (result.type !== 'success') {
-      // Surface Google's REAL reason (redirect_uri_mismatch, invalid_client,
-      // access_denied...) instead of just "cancelled".
-      console.log('Google sign-in did not succeed:', JSON.stringify(result));
-      // Non-success results carry OAuth error details on params/error; the
-      // union type doesn't expose them, so widen locally (no runtime effect).
-      const failedResult = /** @type {any} */ (result);
-      const googleError =
-        (failedResult.params && (failedResult.params.error || failedResult.params.error_description)) ||
-        (failedResult.error && failedResult.error.message) ||
-        '';
-      if (typeof googleError === 'string' && googleError.includes('access_denied')) {
-        return {
-          success: false,
-          error:
-            'Google blocked this account. Add your Gmail under "Test users" on the OAuth consent screen in Google Cloud Console.',
-        };
-      }
-      return { success: false, error: 'Google sign-in was cancelled' };
-    }
-
-    // Exchange the authorization code for tokens.
-    // NOTE: the body is built manually -- Hermes (React Native's JS engine)
-    // does NOT provide URLSearchParams, so using it would throw here.
-    const formBody = [
-      ['code', result.params.code],
-      ['client_id', clientId],
-      ['redirect_uri', getRedirectUri()],
-      ['grant_type', 'authorization_code'],
-      ['code_verifier', authRequest.codeVerifier],
-    ]
-      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
-      .join('&');
-
-    const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formBody,
-    });
-
-    const tokens = await tokenResponse.json();
-
-    // Fetch the user's profile info
-    const userInfoResponse = await fetch(GOOGLE_USERINFO_ENDPOINT, {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-
-    const userInfo = await userInfoResponse.json();
-
+export async function signInWithGoogle(language = 'tr') {
+  // Fail fast with a clear message if no Android client ID was ever
+  // configured (otherwise Google answers with "Error 400: invalid_request").
+  if (Platform.OS === 'android' && !isAndroidClientConfigured()) {
     return {
-      success: true,
-      user: {
-        name: userInfo.name || '',
-        email: userInfo.email || '',
-        picture: userInfo.picture || '',
-      },
+      success: false,
+      error:
+        language === 'tr'
+          ? 'Google girişi bu derleme için yapılandırılmamış. Google Cloud Console\'da türü "Android" (WEB değil) olan OAuth istemcisini açın, İstemci Kimliğini kopyalayıp config.js içindeki GOOGLE_ANDROID_CLIENT_ID alanına yapıştırın ve yeniden derleyin.'
+          : 'Google sign-in is not configured for this build. In Google Cloud Console, open the OAuth client whose type is "Android" (NOT "Web"), copy its Client ID, paste it into GOOGLE_ANDROID_CLIENT_ID in config.js, and rebuild.',
     };
-  } catch (error) {
-    console.error('Google sign-in error:', error);
-    return { success: false, error: error.message || 'Google sign-in failed' };
   }
+
+  // Web/iOS: single known client.
+  if (Platform.OS !== 'android') {
+    try {
+      return { success: true, user: await promptGoogleWithClient(getClientId(), language) };
+    } catch (error) {
+      console.error('Google sign-in error:', error);
+      return { success: false, error: error.message || 'Google sign-in failed' };
+    }
+  }
+
+  // Android: try each registered Android client until one matches the
+  // fingerprint of the installed APK. All failures are captured so the user
+  // gets the most specific reason Google reported.
+  const clientIds = getAndroidClientIds();
+  let lastError = null;
+  for (const clientId of clientIds) {
+    try {
+      const user = await promptGoogleWithClient(clientId, language);
+      return { success: true, user };
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `Google sign-in: client ${clientId.slice(0, 18)}… failed:`,
+        error?.message
+      );
+    }
+  }
+
+  console.error('Google sign-in error:', lastError);
+  return {
+    success: false,
+    error: (lastError && lastError.message) || 'Google sign-in failed',
+  };
 }

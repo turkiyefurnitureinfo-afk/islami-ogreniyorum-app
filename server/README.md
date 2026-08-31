@@ -58,13 +58,13 @@ For a real production server, you'll need to:
    - [PostgreSQL](https://postgresql.org)
    - [Firebase Firestore](https://firebase.google.com/products/firestore)
 
-3. **Update the app's API URL** — in `notifications.js`, change:
+3. **Update the app's API URL** — in `config.js`, change:
    ```js
-   const API_URL = 'http://localhost:3000';
+   export const API_URL = 'https://islami-ogreniyorum-server.onrender.com';
    ```
    to your deployed server URL, e.g.:
    ```js
-   const API_URL = 'https://your-server.onrender.com';
+   export const API_URL = 'https://your-server.onrender.com';
    ```
 
 ## API Endpoints
@@ -87,16 +87,14 @@ For a real production server, you'll need to:
 | `GET` | `/api/health` | Health check with device/post counts |
 | `GET` | `/privacy`, `/` | Public website (privacy policy + landing page) |
 
-## AI Answer (Q&A) — Google-powered
+## AI Answer (Q&A) — Gemini only
 
-The AI answer endpoint (`POST /api/ai/answer`) uses the **Google Programmable Search Engine (Custom Search JSON API)** to return real, verifiable answers with source links to community questions. It does **not** use OpenAI.
+The AI answer endpoint (`POST /api/ai/answer`) answers questions with **Google Gemini** (free tier — get a key at https://aistudio.google.com/apikey, set `GEMINI_API_KEY` in `.env`).
 
-1. Create a Google Cloud API key: https://console.cloud.google.com/apis/credentials
-2. Create a Programmable Search Engine (CX): https://programmablesearchengine.google.com/
-3. Add Islamic sources to search (e.g. `diyanet.gov.tr`, `diyanethaber.com.tr`).
-4. Set `GOOGLE_API_KEY` and `GOOGLE_CX` in `.env`.
+- If Gemini is available, it returns its answer.
+- If Gemini is unavailable (no key, network down, quota), the endpoint returns `success:false`, and the app shows a friendly *"could not generate an answer right now"* message — there is no offline canned-answer engine anymore.
 
-If these are unset, the endpoint falls back to the built-in offline knowledge engine.
+The separate Google Programmable Search path (`GOOGLE_API_KEY` + `GOOGLE_CX`) and the built-in offline knowledge engine were removed to keep a single, consistent answer source.
 
 ## News & Events
 

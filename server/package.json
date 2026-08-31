@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "description": "Push notification backend for İslam nasıl öğrenilir",
   "main": "index.js",
+  "engines": {
+    "node": ">=18.17"
+  },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node check-deploy.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

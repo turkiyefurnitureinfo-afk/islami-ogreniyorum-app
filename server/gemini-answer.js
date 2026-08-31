@@ -9,17 +9,27 @@
  * 1. Get a free API key: https://aistudio.google.com/apikey
  * 2. Add to the server's .env:
  *      GEMINI_API_KEY=your-key
- *    (optionally pin a model: GEMINI_MODEL=gemini-2.5-flash)
+ *    (optionally pin a model: GEMINI_MODEL=gemini-3.6-flash)
  * 3. Restart / redeploy the server. No app rebuild is needed.
  *
  * Free-tier limits are generous for a small user base; if a request is
  * rate-limited (429) we simply fall through to the next answer source.
  */
 
-// Verified live against the API (2026-08): 2.x models are closed to new
-// accounts ("no longer available to new users"), so we default to the
-// current generation and keep older names only as harmless fallbacks.
-const DEFAULT_MODELS = ['gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'];
+// Defaults to current-generation flash models, newest-first, with older
+// names kept as harmless fallbacks as Google deprecates versions.
+// gemini-3.6-flash is the current recommended model (Google retired
+// gemini-2.5-flash / gemini-2.0-flash with "no longer available" 404s).
+const DEFAULT_MODELS = [
+  'gemini-3.6-flash',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+];
+
+// Hard ceiling for a single Gemini HTTP call. Without this a hung upstream
+// connection stalls /api/ai/answer until the client gives up.
+const GEMINI_FETCH_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 15000);
 
 function getApiKey() {
   return (process.env.GEMINI_API_KEY || '').trim();
@@ -49,9 +59,10 @@ async function callGemini(model, prompt, apiKey) {
       'Content-Type': 'application/json',
       'x-goog-api-key': apiKey,
     },
+    signal: AbortSignal.timeout(GEMINI_FETCH_TIMEOUT_MS),
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 512 },
+      generationConfig: { temperature: 0.4, maxOutputTokens: 2000 },
     }),
   });
 

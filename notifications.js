@@ -48,6 +48,52 @@ function resolveSoundMode(soundOption) {
   return 'default';
 }
 
+// ---------------------------------------------------------------------------
+// Verified-identity helper for backend writes.
+//
+// When the user is signed in via native Firebase Auth, we attach a fresh ID
+// token in the Authorization header so the server can cryptographically verify
+// ownership (see server/verify.js). If the module is unavailable (Expo Go,
+// unsigned build, no native config) we simply omit the header and the server
+// falls back to trusting the client-supplied userId — exactly the previous
+// behaviour, so nothing breaks for guests/legacy builds.
+// ---------------------------------------------------------------------------
+let authModule = null; // lazily required to avoid importing Firebase at load time
+function getAuthModule() {
+  if (authModule !== null) return authModule;
+  try {
+    authModule = require('./firebaseAuth.js');
+  } catch (_e) {
+    authModule = false;
+  }
+  return authModule;
+}
+
+async function currentIdToken() {
+  const fb = getAuthModule();
+  if (!fb) return null;
+  try {
+    const user = fb.getCurrentFirebaseUser();
+    if (user && typeof user.getIdToken === 'function') {
+      // getIdToken(true) forces a fresh token; fall back to cached if needed.
+      return await user.getIdToken(true);
+    }
+  } catch (_e) {
+    // Token retrieval failed (e.g. offline) — proceed without it.
+  }
+  return null;
+}
+
+/**
+ * Build an Authorization header for the currently signed-in user, or {} when no
+ * verified identity token is available.
+ * @returns {Promise<Record<string,string>>}
+ */
+export async function authHeaders() {
+  const token = await currentIdToken();
+  return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
 /**
  * Request notification permissions from the user.
  * @returns {Promise<boolean>} true if permission was granted
@@ -70,9 +116,9 @@ export async function cancelAllPrayerNotifications() {
  *
  * @param {string} title - notification title
  * @param {string} body - notification body text
- * @param {string|null} sound - optional sound name (null for silent)
+  * @param {string|null} sound - optional sound name (null = use channel default, undefined = silent)
  */
-export async function sendImmediateNotification(title, body, sound = 'default') {
+export async function sendImmediateNotification(title, body, sound = null) {
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
@@ -113,13 +159,14 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
   const buildContent = (body, chainId) => ({
     title,
     body,
-    sound:
-      mode === 'silent'
-        ? null
-        : mode === 'alarm'
-          ? HIGH_ALARM_SOUND
-          : 'default',
-    _channelId:
+    // Don't set `sound` here — let the channel decide. Setting it explicitly
+    // (e.g. 'default') would override the channel's configured HIGH_ALARM_SOUND
+    // and break the high-alarm / system-sound modes. null = silent mode only.
+    sound: mode === 'silent' ? null : undefined,
+    // NOTE: expo-notifications content object uses `channelId` (not `_channelId`).
+    // The underscore form is silently ignored, which previously routed alarm
+    // notifications to the default channel — so the loud chime never played.
+    channelId:
       mode === 'alarm'
         ? ALARM_CHANNEL_ID
         : DEFAULT_CHANNEL_ID,
@@ -334,11 +381,14 @@ export async function registerDeviceWithBackend(userId, name) {
     console.log('No Expo push token available - skipping backend registration');
     return false;
   }
-
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ userId, expoPushToken, name }),
     });
     return response.ok;
@@ -354,9 +404,13 @@ export async function registerDeviceWithBackend(userId, name) {
  */
 export async function unregisterDeviceFromBackend(userId) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/unregister`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ userId }),
     });
     return response.ok;
@@ -371,12 +425,16 @@ export async function unregisterDeviceFromBackend(userId) {
  * @param {string} userId - the author's user ID
  * @param {string} question - the question text
  */
-export async function notifyBackendNewQuestion(userId, question, name) {
+export async function notifyBackendNewQuestion(userId, question, name, avatar) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/posts`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, question, name }),
+      headers,
+      body: JSON.stringify({ userId, question, name, avatar: avatar || null }),
     });
     if (!response.ok) return { ok: false, postId: null };
     const data = await response.json().catch(() => ({}));
@@ -395,12 +453,16 @@ export async function notifyBackendNewQuestion(userId, question, name) {
  * @param {string} userId - the commenter's user ID
  * @param {string} text - the comment text
  */
-export async function notifyBackendNewContribution(postId, userId, text, name) {
+export async function notifyBackendNewContribution(postId, userId, text, name, avatar) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/posts/${postId}/contributions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, text, name }),
+      headers,
+      body: JSON.stringify({ userId, text, name, avatar: avatar || null }),
     });
     if (!response.ok) return { ok: false, contributionId: null };
     const data = await response.json().catch(() => ({}));
@@ -419,9 +481,13 @@ export async function notifyBackendNewContribution(postId, userId, text, name) {
  */
 export async function notifyBackendLike(postId, contribId, userId) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/posts/${postId}/contributions/${contribId}/like`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ userId }),
     });
     return response.ok;
@@ -460,7 +526,7 @@ export async function notifyBackendEvent(title, body) {
  * @param {Date} params.eventDate - when the event occurs
  * @param {string|null} params.sound - optional sound name
  */
-export async function scheduleEventNotification({ title, body, eventDate, sound = 'default' }) {
+export async function scheduleEventNotification({ title, body, eventDate, sound = null }) {
   const now = new Date();
 
   // Fire the notification at 9:00 AM on the event day
@@ -490,12 +556,16 @@ export async function scheduleEventNotification({ title, body, eventDate, sound 
  * @param {string} userId - the author's user ID (email)
  * @param {string} name - the author's display name
  */
-export async function notifyBackendCommunityPost(postId, userId, name, text, mediaType, mediaUri) {
+export async function notifyBackendCommunityPost(postId, userId, name, text, mediaType, mediaUri, avatar) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/community/posts`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ postId, userId, name, text, mediaType, mediaUri }),
+      headers,
+      body: JSON.stringify({ postId, userId, name, text, mediaType, mediaUri, avatar: avatar || null }),
     });
     return response.ok;
   } catch (error) {
@@ -516,9 +586,13 @@ export async function notifyBackendCommunityPost(postId, userId, name, text, med
  */
 export async function sendContentReport({ contentType, contentId, reporterId, reason }) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/reports`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ contentType, contentId, reporterId, reason }),
     });
     return response.ok;
@@ -537,12 +611,16 @@ export async function sendContentReport({ contentType, contentId, reporterId, re
  * @param {string} text - the comment text
  * @param {string} name - the commenter's display name
  */
-export async function notifyBackendCommunityComment(postId, commentId, userId, text, name) {
+export async function notifyBackendCommunityComment(postId, commentId, userId, text, name, avatar) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/community/posts/${postId}/comments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ commentId, userId, text, name }),
+      headers,
+      body: JSON.stringify({ commentId, userId, text, name, avatar: avatar || null }),
     });
     return response.ok;
   } catch (error) {
@@ -560,9 +638,13 @@ export async function notifyBackendCommunityComment(postId, commentId, userId, t
  */
 export async function notifyBackendCommunityPostLike(postId, userId, name) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/community/posts/${postId}/like`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ userId, name }),
     });
     return response.ok;
@@ -582,14 +664,166 @@ export async function notifyBackendCommunityPostLike(postId, userId, name) {
  */
 export async function notifyBackendCommunityCommentLike(postId, commentId, userId, name) {
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
     const response = await fetch(`${API_URL}/api/community/posts/${postId}/comments/${commentId}/like`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ userId, name }),
     });
     return response.ok;
   } catch (error) {
     console.error('Failed to notify backend of community comment like:', error);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Server-side deletion helpers.
+//
+// Deleting content used to ONLY hide it locally (tombstone). These calls ask
+// the backend to permanently remove the item from the shared feed so it truly
+// disappears for every user on the next sync, instead of being resurrected by
+// a server refresh or seen by other devices. All are best-effort (offline must
+// never block the UI); the local item is always removed regardless.
+// ---------------------------------------------------------------------------
+
+/** DELETE /api/posts/:postId — permanently remove a question thread. */
+export async function deleteServerQuestion(serverPostId, userId) {
+  try {
+    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
+    const response = await fetch(`${API_URL}/api/posts/${encodeURIComponent(serverPostId)}`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ userId }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('deleteServerQuestion failed', error.message);
+    return false;
+  }
+}
+
+/** DELETE /api/posts/:postId/contributions/:contribId — permanently remove an answer. */
+export async function deleteServerAnswer(serverPostId, contribId, userId) {
+  try {
+    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
+    const response = await fetch(
+      `${API_URL}/api/posts/${encodeURIComponent(serverPostId)}/contributions/${encodeURIComponent(contribId)}`,
+      { method: 'DELETE', headers, body: JSON.stringify({ userId }) }
+    );
+    return response.ok;
+  } catch (error) {
+    console.warn('deleteServerAnswer failed', error.message);
+    return false;
+  }
+}
+
+/** DELETE /api/community/posts/:postId — permanently remove a community post. */
+export async function deleteServerCommunityPost(postId, userId) {
+  try {
+    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
+    const response = await fetch(`${API_URL}/api/community/posts/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ userId }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('deleteServerCommunityPost failed', error.message);
+    return false;
+  }
+}
+
+/** DELETE /api/community/posts/:postId/comments/:commentId — permanently remove a comment. */
+export async function deleteServerCommunityComment(postId, commentId, userId) {
+  try {
+    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
+    const response = await fetch(
+      `${API_URL}/api/community/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+      { method: 'DELETE', headers, body: JSON.stringify({ userId }) }
+    );
+    return response.ok;
+  } catch (error) {
+    console.warn('deleteServerCommunityComment failed', error.message);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Account sync (server-backed profile + password storage)
+// ---------------------------------------------------------------------------
+// Accounts are stored on-device, but we also keep a lightweight copy on the
+// backend so profile/email/password changes survive reinstalls and show up on
+// other devices. All calls are best-effort (offline must never block the app).
+
+/** POST /api/users/register — store/refresh the profile for an email. */
+export async function registerUserProfile(
+  email,
+  fullName,
+  passwordHash = null,
+  profilePicture = null,
+  extended = null
+) {
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
+    const response = await fetch(`${API_URL}/api/users/register`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        email,
+        fullName,
+        passwordHash,
+        profilePicture,
+        // Extended signup-profile fields (occupation / address / bio) — the
+        // server MERGES, so passing them is always safe.
+        occupation: extended?.occupation ?? undefined,
+        address: extended?.address ?? undefined,
+        bio: extended?.bio ?? undefined,
+      }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('registerUserProfile failed', error.message);
+    return false;
+  }
+}
+
+/** GET /api/users/:email — fetch the server copy of an account (may be null). */
+export async function fetchServerUser(email) {
+  try {
+    const response = await fetch(`${API_URL}/api/users/${encodeURIComponent(String(email).trim().toLowerCase())}`, {
+      method: 'GET',
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data && data.success ? data.user : null;
+  } catch (error) {
+    console.warn('fetchServerUser failed', error.message);
+    return null;
+  }
+}
+
+/** PUT /api/users/:email — update profile/email and/or password hash. */
+export async function updateServerUser(currentEmail, patch) {
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
+    const response = await fetch(`${API_URL}/api/users/${encodeURIComponent(String(currentEmail).trim().toLowerCase())}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(patch),
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('updateServerUser failed', error.message);
     return false;
   }
 }

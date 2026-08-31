@@ -194,78 +194,9 @@ export const SOUND_OPTIONS = {
 };
 
 export const COMMUNITY_POSTS = {
-  tr: [
-    {
-      id: 1,
-      user: { name: 'Ayşe Y.', avatar: '🧕' },
-      text: 'Bu sabah namazında gerçekten huzur buldum. Hepinize tavsiye ederim, namazdan önce 5 dakika sessizce oturup nefesinize odaklanın. 🌅',
-      timestamp: '3 saat önce',
-      likes: 15,
-      likedByMe: false,
-      media: null,
-      comments: [
-        { id: 1001, user: { name: 'Hasan C.', avatar: '👨‍🎓' }, text: 'Harika bir tavsiye! Ben de deneyeceğim.', timestamp: '2 saat önce', likes: 3, likedByMe: false },
-        { id: 1002, user: { name: 'Fatma S.', avatar: '👩‍🦰' }, text: 'Aynen katılıyorum, çok faydalı bir uygulama.', timestamp: '1 saat önce', likes: 2, likedByMe: false },
-      ],
-    },
-    {
-      id: 2,
-      user: { name: 'Mehmet K.', avatar: '👨‍💻' },
-      text: 'Cami ziyaretimden bir kare. İstanbul\'daki Süleymaniye Camii\'nin ihtişamı gerçekten büyüleyici. 🕌',
-      timestamp: '8 saat önce',
-      likes: 32,
-      likedByMe: false,
-      media: { type: 'image', uri: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?w=800' },
-      comments: [
-        { id: 2001, user: { name: 'Ayşe Y.', avatar: '🧕' }, text: 'Muhteşem bir fotoğraf!', timestamp: '7 saat önce', likes: 5, likedByMe: false },
-      ],
-    },
-    {
-      id: 3,
-      user: { name: 'Zeynep T.', avatar: '👩‍🎨' },
-      text: 'Ramazan ayında yaptığım iftar sofrasından kısa bir video. Hepinize hayırlı iftarlar! 🌙',
-      timestamp: '1 gün önce',
-      likes: 21,
-      likedByMe: false,
-      media: { type: 'video', uri: 'https://www.w3schools.com/html/mov_bbb.mp4' },
-      comments: [],
-    },
-  ],
-  en: [
-    {
-      id: 1,
-      user: { name: 'Aisha Y.', avatar: '🧕' },
-      text: 'I found real peace in this morning\'s prayer. I recommend to all of you, sit quietly for 5 minutes and focus on your breath before prayer. 🌅',
-      timestamp: '3 hours ago',
-      likes: 15,
-      likedByMe: false,
-      media: null,
-      comments: [
-        { id: 1001, user: { name: 'Hasan C.', avatar: '👨‍🎓' }, text: 'Great advice! I will try it too.', timestamp: '2 hours ago', likes: 3, likedByMe: false },
-        { id: 1002, user: { name: 'Fatma S.', avatar: '👩‍🦰' }, text: 'I agree, it\'s a very useful practice.', timestamp: '1 hour ago', likes: 2, likedByMe: false },
-      ],
-    },
-    {
-      id: 2,
-      user: { name: 'Mehmet K.', avatar: '👨‍💻' },
-      text: 'A snapshot from my mosque visit. The grandeur of the Süleymaniye Mosque in Istanbul is truly mesmerizing. 🕌',
-      timestamp: '8 hours ago',
-      likes: 32,
-      likedByMe: false,
-      media: { type: 'image', uri: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?w=800' },
-      comments: [
-        { id: 2001, user: { name: 'Aisha Y.', avatar: '🧕' }, text: 'A magnificent photo!', timestamp: '7 hours ago', likes: 5, likedByMe: false },
-      ],
-    },
-    {
-      id: 3,
-      user: { name: 'Zeynep T.', avatar: '👩‍🎨' },
-      text: 'A short video from my iftar table during Ramadan. Blessed iftar to all of you! 🌙',
-      timestamp: '1 day ago',
-      likes: 21,
-      likedByMe: false,
-      media: { type: 'video', uri: 'https://www.w3schools.com/html/mov_bbb.mp4' },
-      comments: [],
-    },
-  ],
+  // The community feed starts EMPTY by design: no bundled demo posts or fake
+  // user profiles. Content only appears here once real users share posts
+  // (locally created or synced from the server via /api/community/feed).
+  tr: [],
+  en: [],
 };

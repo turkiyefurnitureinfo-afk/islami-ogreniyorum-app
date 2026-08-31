@@ -8,6 +8,10 @@ npm-debug.log*
 server/serviceAccountKey.json
 *firebase-adminsdk*.json
 
+# Android upload keystore (NEVER commit this)
+*.jks
+@*.jks
+
 # Environment / secret files (NEVER commit these)
 .env
 server/.env

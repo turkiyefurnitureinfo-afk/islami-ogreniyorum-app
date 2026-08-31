@@ -31,6 +31,13 @@ for (const f of ['assets/icon.png', 'assets/adaptive-icon.png', 'assets/splash.p
 }
 check('app.json icon', !!appJson.expo.icon, 'missing');
 
+// 3b. Firebase native config (required by @react-native-firebase/auth)
+check(
+  'google-services.json (Firebase native config — EAS build fails without it)',
+  fs.existsSync('google-services.json'),
+  'download it from Firebase console → Project Settings → Your apps → Android app'
+);
+
 // 4. EAS
 console.log('\n[4] EAS');
 check('production build', !!(easJson.build && easJson.build.production), 'missing');
@@ -66,7 +73,10 @@ check('saveSettings', appCode.includes('saveSettings'), 'missing');
 // 8. UGC moderation
 console.log('\n[8] UGC Moderation');
 const community = fs.readFileSync('CommunityTab.js', 'utf8');
-check('ReportPost', community.includes('handleReportPost'), 'missing');
+// Reporting is implemented as handleReportContent() in App.js (wired into
+// every tab via onReport) and sent to POST /api/reports from notifications.js.
+check('ReportContent (App.js)', appCode.includes('handleReportContent'), 'missing');
+check('Report endpoint (notifications.js)', notifications.includes('/api/reports'), 'missing');
 check('BlockUser', community.includes('handleBlockUser'), 'missing');
 check('ModNotice', community.includes('moderationNotice'), 'missing');
 

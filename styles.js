@@ -1,5 +1,3 @@
-import { Platform } from 'react-native';
-
 /**
  * Build the complete style sheet for the app.
  * @param {object} palette - color palette object (dark or light theme)
@@ -14,7 +12,9 @@ export function makeStyles(palette) {
     container: {
       flex: 1,
       paddingHorizontal: 16,
-      paddingTop: Platform.OS === 'android' ? 64 : 32,
+      // Real status-bar / nav-bar spacing now comes from SafeAreaView insets
+      // (react-native-safe-area-context) — Android 15 edge-to-edge safe.
+      paddingTop: 8,
     },
     topSection: {
       flexDirection: 'row',
@@ -373,6 +373,27 @@ export function makeStyles(palette) {
       fontSize: 14,
       fontWeight: '600',
     },
+    forgotPasswordText: {
+      color: palette.accent,
+      fontSize: 13,
+      fontWeight: '600',
+      textAlign: 'center',
+      marginTop: 12,
+    },
+    emailLinkButton: {
+      backgroundColor: palette.panel,
+      borderRadius: 10,
+      paddingVertical: 12,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: palette.border,
+      marginTop: 10,
+    },
+    emailLinkButtonText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: palette.text,
+    },
     googleBlue: { color: '#4285F4' },
     googleRed: { color: '#EA4335' },
     googleYellow: { color: '#FBBC05' },
@@ -584,6 +605,15 @@ export function makeStyles(palette) {
       fontSize: 18,
       marginRight: 8,
     },
+    // Circular frame for real profile pictures in Q&A answer rows. Applied on
+    // top of qaAnswerAvatar; harmless for the emoji-text fallback.
+    qaAvatarImage: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      resizeMode: 'cover',
+      backgroundColor: 'rgba(127,127,127,0.18)',
+    },
     qaAnswerUser: {
       color: palette.text,
       fontSize: 13,
@@ -762,6 +792,24 @@ export function makeStyles(palette) {
     avatar: {
       fontSize: 24,
       marginRight: 10,
+    },
+    // Circular frame for real profile pictures on community post headers.
+    communityAvatarImage: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      marginRight: 10,
+      resizeMode: 'cover',
+      backgroundColor: 'rgba(127,127,127,0.18)',
+    },
+    // Smaller circular frame for comment avatars.
+    communityAvatarImageSmall: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      marginRight: 8,
+      resizeMode: 'cover',
+      backgroundColor: 'rgba(127,127,127,0.18)',
     },
     postUser: {
       color: palette.text,
@@ -1274,6 +1322,25 @@ export function makeStyles(palette) {
       fontSize: 12,
       textAlign: 'center',
       marginBottom: 12,
+    },
+    // Edit Profile modal avatar (reuses profilePicture sizes; no margins so it
+    // sits neatly above the form fields inside the modal card).
+    modalProfilePicture: {
+      width: 84,
+      height: 84,
+      borderRadius: 42,
+      borderWidth: 2,
+      borderColor: palette.primary,
+    },
+    modalProfilePicturePlaceholder: {
+      width: 84,
+      height: 84,
+      borderRadius: 42,
+      backgroundColor: palette.soft,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: palette.border,
     },
 
     // ---------- Welcome Screen ----------

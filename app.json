@@ -2,7 +2,7 @@
   "expo": {
     "name": "İslamı öğreniyorum",
     "slug": "islami-ogreniyorum",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "scheme": "com.joshua.islamiogreniyorum",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -23,6 +23,9 @@
     },
     "android": {
       "package": "com.joshua.islamiogreniyorum",
+      "versionCode": 2,
+      "edgeToEdgeEnabled": true,
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#060b12"
@@ -34,7 +37,12 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK"
       ]
     },
     "ios": {
@@ -42,17 +50,25 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "The app needs access to your camera to let you take photos for the community.",
-        "NSPhotoLibraryUsageDescription": "The app needs access to your photos to let you share them in the community."
+        "NSPhotoLibraryUsageDescription": "The app needs access to your photos to let you share them in the community.",
+        "NSLocationWhenInUseUsageDescription": "Your location is used only to calculate accurate prayer times for where you are.",
+        "NSMicrophoneUsageDescription": "The microphone is used when recording videos to share with the community."
       }
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
       [
         "expo-notifications",
         {
-          "color": "#d8b56a"
+          "color": "#d8b56a",
+          "sounds": ["./assets/sounds/notification_high.wav"],
+          "android": {
+            "useNextNotificationsApi": true
+          }
         }
       ],
       [
@@ -60,6 +76,17 @@
         {
           "photosPermission": "The app needs access to your photos to let you share them in the community.",
           "cameraPermission": "The app needs access to your camera to let you take photos for the community."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "buildToolsVersion": "35.0.0",
+            "minSdkVersion": 24
+          }
         }
       ]
     ],
@@ -71,3 +98,4 @@
     "owner": "joshua93"
   }
 }
+

@@ -1,16 +1,57 @@
 import React, { useState } from 'react';
-import { ScrollView, View, Text, TextInput, Pressable, Linking, ActivityIndicator } from 'react-native';
+import { ScrollView, View, Text, TextInput, Pressable, Linking, ActivityIndicator, Image } from 'react-native';
+import { TranslateButton } from './useTranslate.js';
+import { useCachedAvatar } from './avatarCache.js';
+
+/**
+ * Shows a user's profile picture when available, otherwise the emoji avatar.
+ * The picture is rendered from the on-disk avatar cache when possible, so it
+ * survives offline; the emoji only appears when no picture exists at all.
+ * Used for answer rows in both question lists.
+ */
+const UserAvatar = ({ avatarUrl, avatar, style }) => {
+  const cached = useCachedAvatar(avatarUrl);
+  const src = cached || avatarUrl;
+  const [errored, setErrored] = useState(false);
+  if (src) {
+    if (errored) setErrored(false);
+    return (
+      <Image
+        source={{ uri: src }}
+        style={style}
+        onError={() => setErrored(true)}
+      />
+    );
+  }
+  // No source at all (genuinely no avatar) → emoji fallback.
+  if (!avatarUrl) {
+    return <Text style={[style, stylesFallbackText]}>{avatar || '👤'}</Text>;
+  }
+  // URL exists but the image failed to load (offline + uncached) → neutral
+  // placeholder, NOT the user's emoji. The emoji is reserved for "no picture".
+  return (
+    <View style={style}>
+      <Text style={{ fontSize: 16, opacity: 0.4 }}>👤</Text>
+    </View>
+  );
+};
+// The emoji fallback keeps the original text styling (font-size based) — the
+// passed-in style is a fixed-size image style, so layer a text style under it.
+const stylesFallbackText = { fontSize: 18 };
+
 
 const QATab = ({
   styles,
   palette,
   t,
+  language,
   qAndA,
   expandedQas,
   setExpandedQas,
   newQuestion,
   setNewQuestion,
   handleAskQuestion,
+  postingQuestion,
   handleLikeQuestion,
   handleLikeAnswer,
   newAnswer,
@@ -20,6 +61,7 @@ const QATab = ({
   setAnswerFormOpen,
   handleAIAnswer,
   account,
+  profilePicture,
   handleEditQuestion,
   handleDeleteQuestion,
   handleEditAnswer,
@@ -129,9 +171,24 @@ const QATab = ({
           value={newQuestion}
           onChangeText={setNewQuestion}
           multiline
+          // Pressing enter posts the question, which auto-triggers the AI
+          // answer (submitBehavior replaces blurOnSubmit on RN 0.79+).
+          submitBehavior="submit"
+          onSubmitEditing={handleAskQuestion}
         />
-        <Pressable style={styles.button} onPress={handleAskQuestion}>
-          <Text style={styles.buttonText}>{t?.postQuestion || 'Post Question'}</Text>
+        <Pressable
+          style={[styles.button, postingQuestion && styles.disabledButton]}
+          onPress={handleAskQuestion}
+          disabled={postingQuestion}
+        >
+          {postingQuestion ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <ActivityIndicator size="small" color="#08131a" style={{ marginRight: 8 }} />
+              <Text style={styles.buttonText}>{t?.postingQuestion || 'Posting...'}</Text>
+            </View>
+          ) : (
+            <Text style={styles.buttonText}>{t?.postQuestion || 'Post Question'}</Text>
+          )}
         </Pressable>
       </View>
 
@@ -151,6 +208,7 @@ const QATab = ({
                 <Text style={styles.qText}>{item.question}</Text>
                 <Text style={styles.expandText}>{expandedQas[item.id] ? '−' : '+'}</Text>
               </View>
+              <TranslateButton text={item.question} t={t} uiLang={language} />
 
               <View style={styles.qaLikesRow}>
                 <Pressable onPress={() => handleLikeQuestion(item.id)}>
@@ -183,25 +241,30 @@ const QATab = ({
                     <Text style={styles.referenceButtonText}>{t.reference}{item.source}</Text>
                   </Pressable>
 
-                  {/* AI Answer button */}
-                  <Pressable
-                    style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
-                    onPress={() => handleAIAnswer(item.id)}
-                    disabled={item.aiAnswerLoading}
-                  >
-                    {item.aiAnswerLoading ? (
-                      <View style={styles.aiAnswerLoadingRow}>
-                        <ActivityIndicator size="small" color={palette.muted} />
+                  {/* AI Answer button — hidden once the AI has answered (the
+                      answer is generated automatically when the question is
+                      posted). Stays visible after a failure so it doubles as
+                      the retry button. */}
+                  {!item.aiAnswer && (
+                    <Pressable
+                      style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
+                      onPress={() => handleAIAnswer(item.id)}
+                      disabled={item.aiAnswerLoading}
+                    >
+                      {item.aiAnswerLoading ? (
+                        <View style={styles.aiAnswerLoadingRow}>
+                          <ActivityIndicator size="small" color={palette.muted} />
+                          <Text style={styles.aiAnswerButtonText}>
+                            {t?.aiThinking || 'AI is thinking...'}
+                          </Text>
+                        </View>
+                      ) : (
                         <Text style={styles.aiAnswerButtonText}>
-                          {t?.aiThinking || 'AI is thinking...'}
+                          {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
                         </Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.aiAnswerButtonText}>
-                        {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
-                      </Text>
-                    )}
-                  </Pressable>
+                      )}
+                    </Pressable>
+                  )}
 
                   {item.aiError && (
                     <Text style={styles.aiErrorText}>{item.aiError}</Text>
@@ -220,7 +283,7 @@ const QATab = ({
                   {item.aiAnswer && (
                     <View style={styles.aiBadgeWrap}>
                       <Text style={styles.aiBadge}>
-                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                       </Text>
                     </View>
                   )}
@@ -231,13 +294,18 @@ const QATab = ({
                       item.answers.map((ans) => (
                         <View key={ans.id} style={[styles.qaAnswerItem, ans.isAI && styles.aiContribution]}>
                           <View style={styles.qaAnswerHeader}>
-                            <Text style={styles.qaAnswerAvatar}>{ans.user.avatar}</Text>
+                            <UserAvatar
+                              avatarUrl={ans.user.avatarUrl}
+                              avatar={ans.user.avatar}
+                              style={[styles.qaAnswerAvatar, styles.qaAvatarImage]}
+                            />
                             <View>
                               <Text style={styles.qaAnswerUser}>{ans.user.name}</Text>
                               <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
                             </View>
                           </View>
                           <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                          <TranslateButton text={ans.text} t={t} uiLang={language} />
                           <View style={styles.qaAnswerFooter}>
                             <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
                             <Pressable onPress={() => handleLikeAnswer(item.id, ans.id)}>
@@ -303,6 +371,7 @@ const QATab = ({
               <Text style={styles.qText}>{item.question}</Text>
               <Text style={styles.expandText}>{expanded ? '−' : '+'}</Text>
             </View>
+            <TranslateButton text={item.question} t={t} uiLang={language} />
 
             <View style={styles.qaLikesRow}>
               <Pressable onPress={() => handleLikeQuestion(item.id)}>
@@ -335,25 +404,30 @@ const QATab = ({
                   <Text style={styles.referenceButtonText}>{t.reference}{item.source}</Text>
                 </Pressable>
 
-                {/* AI Answer button */}
-                <Pressable
-                  style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
-                  onPress={() => handleAIAnswer(item.id)}
-                  disabled={item.aiAnswerLoading}
-                >
-                  {item.aiAnswerLoading ? (
-                    <View style={styles.aiAnswerLoadingRow}>
-                      <ActivityIndicator size="small" color={palette.muted} />
+                {/* AI Answer button — hidden once the AI has answered (the
+                    answer is generated automatically when the question is
+                    posted). Stays visible after a failure so it doubles as
+                    the retry button. */}
+                {!item.aiAnswer && (
+                  <Pressable
+                    style={[styles.aiAnswerButton, item.aiAnswerLoading && styles.disabledButton]}
+                    onPress={() => handleAIAnswer(item.id)}
+                    disabled={item.aiAnswerLoading}
+                  >
+                    {item.aiAnswerLoading ? (
+                      <View style={styles.aiAnswerLoadingRow}>
+                        <ActivityIndicator size="small" color={palette.muted} />
+                        <Text style={styles.aiAnswerButtonText}>
+                          {t?.aiThinking || 'AI is thinking...'}
+                        </Text>
+                      </View>
+                    ) : (
                       <Text style={styles.aiAnswerButtonText}>
-                        {t?.aiThinking || 'AI is thinking...'}
+                        {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
                       </Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.aiAnswerButtonText}>
-                      {t?.aiAskAnswer || '🤖 Ask AI for an answer'}
-                    </Text>
-                  )}
-                </Pressable>
+                    )}
+                  </Pressable>
+                )}
 
                 {item.aiError && (
                   <Text style={styles.aiErrorText}>{item.aiError}</Text>
@@ -372,7 +446,7 @@ const QATab = ({
                 {item.aiAnswer && (
                   <View style={styles.aiBadgeWrap}>
                     <Text style={styles.aiBadge}>
-                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                     </Text>
                   </View>
                 )}
@@ -383,13 +457,18 @@ const QATab = ({
                     item.answers.map((ans) => (
                       <View key={ans.id} style={[styles.qaAnswerItem, ans.isAI && styles.aiContribution]}>
                         <View style={styles.qaAnswerHeader}>
-                          <Text style={styles.qaAnswerAvatar}>{ans.user.avatar}</Text>
+                          <UserAvatar
+                            avatarUrl={ans.user.avatarUrl}
+                            avatar={ans.user.avatar}
+                            style={[styles.qaAnswerAvatar, styles.qaAvatarImage]}
+                          />
                           <View>
                             <Text style={styles.qaAnswerUser}>{ans.user.name}</Text>
                             <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
                           </View>
                         </View>
                         <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                        <TranslateButton text={ans.text} t={t} uiLang={language} />
                         <View style={styles.qaAnswerFooter}>
                           <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
                           <Pressable onPress={() => handleLikeAnswer(item.id, ans.id)}>

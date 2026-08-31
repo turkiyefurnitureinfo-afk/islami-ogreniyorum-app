@@ -1,8 +1,9 @@
 import React from 'react';
-import { SafeAreaView, View, Text, TextInput, Pressable, Image } from 'react-native';
+import { View, Text, TextInput, Pressable, Image, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
-const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, handleAuthAction, handleGoogleSignIn }) => {
+const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, handleAuthAction, handleForgotPassword, handleGoogleSignIn, handleSendEmailLink, emailLinkSent, authBusy }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
 
@@ -79,11 +80,23 @@ const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, han
             </Text>
           </View>
 
-          <Pressable onPress={handleAuthAction} style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>
-              {authMode === 'signup' ? getTranslation('createAccount', 'Create Account') : getTranslation('doLogin', 'Login')}
-            </Text>
+          <Pressable onPress={handleAuthAction} style={styles.primaryButton} disabled={authBusy}>
+            {authBusy ? (
+              <ActivityIndicator size="small" color="#08131a" />
+            ) : (
+              <Text style={styles.primaryButtonText}>
+                {authMode === 'signup' ? getTranslation('createAccount', 'Create Account') : getTranslation('doLogin', 'Login')}
+              </Text>
+            )}
           </Pressable>
+
+          {authMode === 'login' && (
+            <Pressable onPress={() => { if (handleForgotPassword) handleForgotPassword(); }} hitSlop={8}>
+              <Text style={styles.forgotPasswordText}>
+                {getTranslation('forgotPassword', 'Forgot password?')}
+              </Text>
+            </Pressable>
+          )}
 
           <View style={styles.dividerRow}>
             <View style={styles.dividerLine} />
@@ -91,11 +104,27 @@ const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, han
             <View style={styles.dividerLine} />
           </View>
 
-          <Pressable onPress={handleGoogleSignIn} style={styles.googleButton}>
-            <Text style={styles.googleButtonText}>
-              <Text style={styles.googleBlue}>G</Text><Text style={styles.googleRed}>o</Text><Text style={styles.googleYellow}>o</Text><Text style={styles.googleBlue}>g</Text><Text style={styles.googleGreen}>l</Text><Text style={styles.googleRed}>e</Text> 
-              <Text style={styles.googleText}> {getTranslation('google', 'Sign in with Google').replace('Google', '')}</Text>
-            </Text>
+                    <Pressable onPress={handleGoogleSignIn} style={styles.googleButton} disabled={authBusy}>
+            {authBusy ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.googleButtonText}>
+                <Text style={styles.googleBlue}>G</Text><Text style={styles.googleRed}>o</Text><Text style={styles.googleYellow}>o</Text><Text style={styles.googleBlue}>g</Text><Text style={styles.googleGreen}>l</Text><Text style={styles.googleRed}>e</Text> 
+                <Text style={styles.googleText}> {getTranslation('google', 'Sign in with Google').replace('Google', '')}</Text>
+              </Text>
+            )}
+          </Pressable>
+
+          <Pressable onPress={handleSendEmailLink} style={styles.emailLinkButton} disabled={authBusy}>
+            {authBusy ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.emailLinkButtonText}>
+                {emailLinkSent
+                  ? getTranslation('emailLinkResend', 'Link sent — tap to resend')
+                  : getTranslation('emailLink', 'Sign in with email link')}
+              </Text>
+            )}
           </Pressable>
         </View>
       </View>
