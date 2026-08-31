@@ -4,15 +4,20 @@
    ============================================================ */
 
 :root {
-  --page: #08131a;
-  --panel: #0e1f2c;
-  --card: #142d3c;
-  --text: #edf4f6;
-  --muted: #9bb1bf;
-  --primary: #d8b56a;
-  --accent: #6bbf92;
+  /* Exact colors from the app's dark interface (App.js palette),
+     so the website matches the app's background and is easy to read. */
+  --page: #060b12;        /* app "page" background */
+  --shell: #081420;       /* app "shell" background */
+  --panel: #0e1f2c;       /* app "panel" */
+  --card: #142d3c;        /* app "card" */
+  --cardsoft: #16364a;    /* app "cardSoft" */
+  --header: #102a39;      /* app "header" */
+  --soft: #112f3e;        /* app "soft" */
+  --text: #edf4f6;        /* app "text" */
+  --muted: #9bb1bf;       /* app "muted" */
+  --primary: #d8b56a;     /* app gold */
+  --accent: #6bbf92;      /* app green */
   --border: rgba(255, 255, 255, 0.08);
-  --soft: #112f3e;
 }
 
 * {
@@ -27,7 +32,7 @@ html {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: var(--background);
+  background: var(--page);
   color: var(--text);
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
@@ -47,7 +52,7 @@ a:hover { text-decoration: underline; }
 
 /* ---------- Top navigation ---------- */
 .navbar {
-  background: var(--panel);
+  background: var(--header);
   border-bottom: 1px solid var(--border);
   padding: 16px 20px;
   display: flex;
@@ -201,7 +206,7 @@ footer {
   border-top: 1px solid var(--border);
   padding: 28px 20px;
   text-align: center;
-  background: var(--panel);
+  background: var(--header);
   color: var(--muted);
   font-size: 14px;
 }
