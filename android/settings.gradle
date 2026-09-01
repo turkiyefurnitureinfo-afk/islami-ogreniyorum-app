@@ -31,7 +31,11 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
 }
 expoAutolinking.useExpoModules()
 
-rootProject.name = 'İslamı öğreniyorum'
+// NOTE: This must be plain ASCII (no Turkish characters). Gradle uses this as
+// the project identifier during remote builds (EAS) and non-ASCII values can
+// corrupt the build state in headless environments. The human-readable app
+// name lives in app.json and android/app/src/main/res/values/strings.xml.
+rootProject.name = 'islamiogreniyorum'
 
 expoAutolinking.useExpoVersionCatalog()
 

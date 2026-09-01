@@ -41,7 +41,6 @@
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
-    "eas-cli": "^22.6.0",
     "typescript": "~5.8.3"
   },
   "private": true

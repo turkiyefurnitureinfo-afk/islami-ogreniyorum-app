@@ -36,5 +36,9 @@ server/*.log
 *.bak
 render.yaml.bak
 server/t-out.txt
+
+# EAS build log captures (debugging artifacts)
+.easlogs/
+eas-status.json
 server/t-err.txt
 dist-verify/
