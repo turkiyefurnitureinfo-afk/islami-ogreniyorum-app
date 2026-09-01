@@ -159,7 +159,7 @@ Free tools: emulator screenshots framed via shots.so / previewed.app; feature gr
 | Name | Yes | Functionality/personalization | Display name visible on posts |
 | Email | Yes | Account management | No (also anonymous push-routing id) |
 | User content (posts/Q&A/comments) | Yes | App functionality | Public to other users |
-| Photos/video | Optional | Shared content | URI stored server-side; files stay on-device (cross-device display is text-only today) |
+| Photos/video | Optional | Shared content | User picks via the Android system photo picker (no library scan); file is uploaded to the app's own Firebase Storage and shown to other users in the community feed / as profile picture |
 | Push token / device ID | Yes | Messaging | Expo push service |
 
 - Encrypted in transit: **Yes** · Deletion request: **Yes** (in-app Delete Account + support email)
