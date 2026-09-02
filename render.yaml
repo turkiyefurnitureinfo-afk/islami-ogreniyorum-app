@@ -11,17 +11,17 @@
 #   3) Fill in the secret env vars (EXPO_ACCESS_TOKEN, GEMINI_API_KEY,
 #      GOOGLE_APPLICATION_CREDENTIALS_JSON) in the service's Environment dashboard.
 services:
-  # Static website (landing page)
-  - type: static
+  # Static website (landing page) — served via a tiny Node static server
+  - type: web
     name: islami-ogreniyorum-website
+    runtime: node
     plan: free
     rootDir: website
-    buildCommand: ""  # no build step needed for a static site
-    publishDir: .
-    headers:
-      - path: /*
-        name: Cache-Control
-        value: "public, max-age=3600"
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
 
   # Backend API server
   - type: web
