@@ -4,6 +4,9 @@
 # The backend source is in the `server/` subfolder, so the service uses
 # rootDir: server (Render sets the working directory there before build/start).
 #
+# The backend server (server/index.js) already serves the static website
+# from the /website folder via express.static — no separate website service needed.
+#
 # How to use:
 #   1) Push this repo (including this file) to GitHub.
 #   2) In Render: "New" → "Blueprint" → pick the repo → Render auto-detects this
@@ -11,19 +14,7 @@
 #   3) Fill in the secret env vars (EXPO_ACCESS_TOKEN, GEMINI_API_KEY,
 #      GOOGLE_APPLICATION_CREDENTIALS_JSON) in the service's Environment dashboard.
 services:
-  # Static website (landing page) — served via a tiny Node static server
-  - type: web
-    name: islami-ogreniyorum-website
-    runtime: node
-    plan: free
-    rootDir: website
-    buildCommand: npm install
-    startCommand: node server.js
-    envVars:
-      - key: NODE_ENV
-        value: production
-
-  # Backend API server
+  # Backend API server (also serves the static website)
   - type: web
     name: islami-ogreniyorum-server
     runtime: node
