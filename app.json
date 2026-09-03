@@ -2,7 +2,7 @@
   "expo": {
     "name": "İslamı öğreniyorum",
     "slug": "islami-ogreniyorum",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "scheme": "com.joshua.islamiogreniyorum",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.joshua.islamiogreniyorum",
-      "versionCode": 2,
+      "versionCode": 20,
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
@@ -80,9 +80,9 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 35,
-            "targetSdkVersion": 35,
-            "buildToolsVersion": "35.0.0",
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "buildToolsVersion": "36.0.0",
             "minSdkVersion": 24
           }
         }

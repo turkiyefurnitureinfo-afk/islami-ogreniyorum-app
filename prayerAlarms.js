@@ -21,7 +21,7 @@
 // catch-up rings without touching the other prayers.
 // ---------------------------------------------------------------------------
 
-import { Platform } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { HIGH_ALARM_SOUND } from './notifications.js';
 
@@ -121,6 +121,32 @@ export function buildAlarmContent({ prayerLabel, language, isCatchUp, chainId })
 }
 
 /**
+ * Best-effort: on Android 12+ (API 31+) request the "Alarm & reminders"
+ * capability so expo-notifications' exact/Date+Daily triggers actually fire on time.
+ *
+ * Declaring `SCHEDULE_EXACT_ALARM` in the manifest is not enough: on Android 14
+ * (and on many OEM ROМs) it is a runtime app-operation that the user must grant,
+ * otherwise the system may silently defer/in-exact the scheduled alarm. This call asks
+ * once when an alarm is configured; if the user declines, scheduling still proceeds
+ * (the OS will just fire it inexactly, exactly the previous behavior — no regression).
+ */
+async function ensureExactAlarmPermission() {
+  try {
+    if (Platform.OS === 'android' && Platform.Version >= 31) {
+      const granted = await PermissionsAndroid.request(
+        'android.permission.SCHEDULE_EXACT_ALARM'
+      );
+      if (!granted) {
+        console.warn('Exact-alarm permission not granted — prayer alarms may be inexact.');
+      }
+    }
+  } catch (e) {
+    // Best-effort only; never let a permission hiccup break scheduling.
+
+  }
+}
+
+/**
  * Schedule every enabled alarm from a per-prayer config.
  *
  * Replaces the legacy "one global sound mode" behaviour: notifications derive
@@ -136,6 +162,9 @@ export function buildAlarmContent({ prayerLabel, language, isCatchUp, chainId })
  */
 export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t }) {
   if (Platform.OS !== 'android') return 0;
+
+  // Ask for the exact-alarm app-op so alarm rings on time on Android 12+.
+  await ensureExactAlarmPermission();
 
   // Channels must exist BEFORE scheduling or Android falls back to defaults.
   await setupAlarmChannel();

@@ -4,6 +4,7 @@ import {
   GOOGLE_ANDROID_CLIENT_ID,
   GOOGLE_ANDROID_CLIENT_ID_EAS,
   GOOGLE_ANDROID_CLIENT_ID_RELEASE,
+  GOOGLE_ANDROID_CLIENT_ID_PLAY,
   GOOGLE_WEB_CLIENT_ID,
 } from './config.js';
 
@@ -78,6 +79,9 @@ function isAndroidClientConfigured() {
 // signed the installed APK — the first one whose SHA-1 matches succeeds.
 function getAndroidClientIds() {
   return [
+    // Play App-Signing cert first (matches the Play-installed build). Empty/
+    // placeholder ids are filtered out below, so this is inert until a real id is set.
+    GOOGLE_ANDROID_CLIENT_ID_PLAY,
     GOOGLE_ANDROID_CLIENT_ID_RELEASE,
     GOOGLE_ANDROID_CLIENT_ID,
     GOOGLE_ANDROID_CLIENT_ID_EAS,

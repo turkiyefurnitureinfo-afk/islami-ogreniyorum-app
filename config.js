@@ -66,6 +66,40 @@ export const SUPPORT_EMAIL = 'info@learningislamapp.com';
 export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-3i1aml4qbto4cve3tmi8kjnmrqm0bro3.apps.googleusercontent.com';
 export const GOOGLE_ANDROID_CLIENT_ID_EAS = '817195380589-posfh2h08650q1pmripm3h6g8js7mug2.apps.googleusercontent.com';
 export const GOOGLE_ANDROID_CLIENT_ID_RELEASE = '817195380589-2a0fo0smv7ssunhp82a3dopprdgvpobv.apps.googleusercontent.com'; // Android client for my-upload-key.keystore (SHA-1 6E:8E:23:CA:…) — created when the fingerprint was registered
+// ---------------------------------------------------------------------------
+// GOOGLE ANDROID CLIENT ID FOR THE GOOGLE-PLAY-INSTALLED BUILD
+// ---------------------------------------------------------------------------
+// The build you install from Google Play is signed with GOOGLE PLAY APP SIGNING,
+// NOT the upload key listed above. Google rejects every Google Sign-In attempt
+// with "Error 400: invalid_request" unless your Firebase project has an android
+// OAuth client whose SHA-1 matches THAT Play app-signing certificate.
+//
+// To wire it up (one-time, in your accounts — no code change here beyond the ID):
+//   1) Play Console → your app → Setup → App integrity → "App signing" →
+//      copy the two "Certificate fingerprints" (SHA-1 AND SHA-256) of the
+//      "App signing key certificate"  (NOT the "Upload key certificate").
+//   2) Firebase Console → Project settings → Your apps →
+//      select the com.joshua.islamiogreniyorum Android app → Add fingerprint →
+//      paste BOTH SHA-1 and SHA-256 from step 1 → Save.
+//   3) Firebase then auto-generates a NEW android OAuth client(
+//      "client_type": 1) under Project settings → Your apps → the android app;
+//      copy its "Android client ID" → paste it into GOOGLE_ANDROID_CLIENT_ID_PLAY
+//      below.
+//   4) ALSO download the updated google-services.json from Firebase and replace BOTH
+//      copies (repo root AND android/app/) — they re-stamp the app and re-build(EAS.
+//
+// 📎 PLAY APP-SIGNING CERT FINGERPRINT FOR com.joshua.islamiogreniyorum
+//   (recorded 2026-09-03 from Play Console → App signing → "App signing key certificate"):
+//     SHA-1   : 84:1A:BB:8F:3F:94:F8:14:E9:01:D9:15:F9:77:11:B9:63:19:D6:6D
+//     SHA-256 : 6F:84:EF:C2:28:14:FB:B7:E7:00:47:56:5D:5E:62:07:66:AF:FD:CB:02:0D:F0:93:6D:C6:8D:BB:60:89:D6:C4
+//   The 40-hex certificate_hash form of the SHA-1 (what Firebase writes into
+//   google-services.json) is: 841abb8f3f94f814e901d915f97711b96319d66d
+//
+//   ⚠️ DONE (value set below): the Play App-Signing android OAuth client id below is
+//   the one Firebase issued for the fingerprint above (from your updated google-services.json).
+//   Keep GOOGLE_ANDROID_CLIENT_ID_PLAY in sync with the "oauth_client"/"certificate_hash" in
+//   BOTH google-services.json copies (repo root AND android/app/) if you ever re-download them.
+export const GOOGLE_ANDROID_CLIENT_ID_PLAY = '817195380589-m6ar0h19remec01niapgm4i08r17pvm8.apps.googleusercontent.com'; // Android OAuth client for Google Play App Signing key (Firebase-issued; matches android/app/google-services.json)
 export const GOOGLE_WEB_CLIENT_ID = '817195380589-3d5uioh20iaiehr20b7dj9ch76t3jk8r.apps.googleusercontent.com';
 
 // ---------------------------------------------------------------------------

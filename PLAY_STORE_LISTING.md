@@ -9,15 +9,15 @@ Support email: `info@learningislamapp.com`
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | **Target API 35** — Play blocks new releases targeting ≤34 after **31 Aug 2026**. ✅ FIXED: `gradle.properties` now sets compile+target to **35**, with an edge-to-edge opt-out in `AppTheme`. Verify by installing the versionCode ≥4 APK on a device/emulator before store submission; plan the SDK 53 upgrade for proper insets support later. | 🔶 Fixed pending device check |
+| 1 | **Target API 36** — Google Play requires new releases to target **API 36 (Android 16)** from **31 Aug 2026**. ✅ FIXED: `gradle.properties`, `app.json` (`expo-build-properties`), and build-tools updated to **36**; SDK Platform android-36 installed. Verify by installing the versionCode 5 APK on a device/emulator before store submission. | 🔶 Fixed pending device check |
 | 2 | **Privacy policy URL live** — use `https://islami-ogreniyorum-server.onrender.com/privacy` until learningislamapp.com is connected. Verified HTTP 200. | ✅ Ready (swap later) |
 | 3 | **UGC reporting must actually work** — ✅ FIXED: ⚑ on every question/answer/post/comment opens a Report / Block-user dialog; reports persist server-side (`reports` collection via `POST /api/reports`), blocking hides the author locally. | ✅ |
 | 4 | Account deletion exists in-app (Settings → Danger Zone). Keep it. | ✅ |
 | 5 | Data safety form below mirrors real data flows. | ✅ Use as-is |
 
-> Fix #1 either by upgrading to Expo SDK 53 (recommended; handles edge-to-edge),
-> or short-term add `android.targetSdkVersion=35` to `android/gradle.properties`
-> and test the enforced edge-to-edge layout carefully.
+> Fix #1 (DONE): `android.targetSdkVersion=36`, `android.compileSdkVersion=36` now set in
+> `android/gradle.properties` + `app.json`, build-tools `36.0.0`, and SDK Platform
+> android-36 installed. Test the target-36 app on a device before submitting.
 
 ---
 
