@@ -21,7 +21,7 @@
 // catch-up rings without touching the other prayers.
 // ---------------------------------------------------------------------------
 
-import { PermissionsAndroid, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { HIGH_ALARM_SOUND } from './notifications.js';
 
@@ -147,6 +147,29 @@ async function ensureExactAlarmPermission() {
 }
 
 /**
+ * Best-effort: if a native `AlarmClock` module (android AlarmManager.setAlarmClock)
+ * is present in the build, arm a guaranteed full-screen, exact alarm for the next
+ * occurrence. Falls back silently (and fully) to expo-notifications if the module
+ * is not built in or throws — zero regression on devices without it.
+ */
+async function armNativeAlarm(tsEpochMs, chainId, label, language) {
+  try {
+    const Native = NativeModules && NativeModules.AlarmClock;
+    if (
+      Native &&
+      typeof Native.setAlarmClock === 'function' &&
+      Number.isFinite(tsEpochMs) &&
+      tsEpochMs > 0
+    ) {
+      await Native.setAlarmClock(tsEpochMs, label, chainId);
+    }
+  } catch (_e) {
+    // Native alarm unavailable/failed — expo-notifications path already scheduled stiff acts.
+
+  }
+}
+
+/**
  * Schedule every enabled alarm from a per-prayer config.
  *
  * Replaces the legacy "one global sound mode" behaviour: notifications derive
@@ -223,6 +246,13 @@ export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t })
         });
         scheduled += 1;
       }
+// Optional native AlarmManager.setAlarmClock for the NEXT occurrence (guaranteed
+      // full-screen + exact + Doze-exempt). Falls back harmlessly if not built in / throws.
+      await armNativeAlarm(
+        nextFire.getTime(),
+        `native-${key}-${nextFire.getTime()}`,
+        label
+      );
     }
   }
   return scheduled;
