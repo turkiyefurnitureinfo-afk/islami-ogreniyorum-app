@@ -2,7 +2,7 @@
   "expo": {
     "name": "İslamı öğreniyorum",
     "slug": "islami-ogreniyorum",
-    "version": "1.0.5",
+    "version": "1.0.3",
     "scheme": "com.joshua.islamiogreniyorum",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
