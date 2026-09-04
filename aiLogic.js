@@ -18,8 +18,24 @@
 //   no server. (Optional in production: add Firebase App Check.)
 // ---------------------------------------------------------------------------
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
+// Lazy imports for Firebase Web SDK - only loaded when AI features are used
+// This prevents crashes on React Native where Web SDK doesn't work
+let _firebaseApp = null;
+let _firebaseAI = null;
+
+async function getFirebaseAppModules() {
+  if (!_firebaseApp) {
+    _firebaseApp = await import('firebase/app');
+  }
+  return _firebaseApp;
+}
+
+async function getFirebaseAIModules() {
+  if (!_firebaseAI) {
+    _firebaseAI = await import('firebase/ai');
+  }
+  return _firebaseAI;
+}
 
 // Web-app config for THIS Firebase project (islami-ogreniyorum). These are
 // public, client-side identifiers — the same values Firebase publishes in
@@ -58,9 +74,12 @@ let appInstance = null;
 /** Initialise (once) and return the Firebase JS app used for AI calls.
  *  Also reused by mediaService.js (Firebase Storage uploads) so both features
  *  share a single initialised app instance. */
-export function getFirebaseApp() {
+export async function getFirebaseApp() {
   if (!appInstance) {
-    appInstance = getApps().length > 0 ? getApp() : initializeApp(FIREBASE_WEB_CONFIG);
+    const firebaseApp = await getFirebaseAppModules();
+    appInstance = firebaseApp.getApps().length > 0 
+      ? firebaseApp.getApp() 
+      : firebaseApp.initializeApp(FIREBASE_WEB_CONFIG);
   }
   return appInstance;
 }
@@ -107,11 +126,12 @@ const ANDROID_CERTS = [
 const IOS_BUNDLE_ID = 'com.joshua.islamiogreniyorum';
 const GEMINI_REST_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+import { Platform } from 'react-native';
+
 /** React Native platform (android/ios/web), safely detected in any environment. */
 function detectPlatform() {
   try {
-    const RN = require('react-native');
-    return RN.Platform && RN.Platform.OS ? RN.Platform.OS : 'web';
+    return Platform && Platform.OS ? Platform.OS : 'web';
   } catch {
     return 'web';
   }
@@ -189,6 +209,7 @@ export async function getAIAnswer(question, language = 'tr') {
   let restError = null;
 
   // Primary path on installed builds: direct REST call with identity headers.
+  // This is the ONLY path that works on Android/iOS with restricted API keys.
   if (platform !== 'web') {
     try {
       return await runWithModelFallback(
@@ -197,10 +218,13 @@ export async function getAIAnswer(question, language = 'tr') {
       );
     } catch (error) {
       restError = error;
+      // On mobile platforms, REST API is the only option - don't fall back to Web SDK
+      throw error;
     }
   }
 
-  // Fallback: Firebase AI Logic (Gemini Developer API) via the JS SDK.
+  // Fallback for web builds: Firebase AI Logic (Gemini Developer API) via the JS SDK.
+  // NOTE: Web SDK does NOT work on React Native/Android - only use on web platform!
   try {
     return await runWithModelFallback(
       (model) => callFirebaseAI(model, safeQuestion, { systemInstruction }),
@@ -291,8 +315,12 @@ async function callGeminiREST(model, prompt, opts = {}) {
  *  are attached, so it only succeeds when the API key allows browser-style
  *  traffic (web builds / Expo Go / a project that also has a web API key). */
 async function callFirebaseAI(model, prompt, opts = {}) {
-  const ai = getAI(getFirebaseApp(), { backend: new GoogleAIBackend() });
-  const generativeModel = getGenerativeModel(ai, {
+  // Lazy load Firebase AI modules
+  const firebaseAI = await getFirebaseAIModules();
+  const app = await getFirebaseApp();
+  
+  const ai = firebaseAI.getAI(app, { backend: new firebaseAI.GoogleAIBackend() });
+  const generativeModel = firebaseAI.getGenerativeModel(ai, {
     model,
     ...(opts.systemInstruction ? { systemInstruction: opts.systemInstruction } : {}),
     generationConfig: {
@@ -392,6 +420,7 @@ export async function translateText(text) {
   let restError = null;
 
   // Primary path on installed builds: REST with identity headers.
+  // This is the ONLY path that works on Android/iOS with restricted API keys.
   if (platform !== 'web') {
     try {
       const result = await runWithModelFallback(
@@ -401,10 +430,13 @@ export async function translateText(text) {
       return finalizeTranslation(result.answer, safeText);
     } catch (error) {
       restError = error;
+      // On mobile platforms, REST API is the only option - don't fall back to Web SDK
+      throw error;
     }
   }
 
-  // Fallback: Firebase AI Logic (Gemini Developer API) via the JS SDK.
+  // Fallback for web builds: Firebase AI Logic (Gemini Developer API) via the JS SDK.
+  // NOTE: Web SDK does NOT work on React Native/Android - only use on web platform!
   try {
     const result = await runWithModelFallback(
       (model) => callFirebaseAI(model, prompt, { temperature: 0.1, maxOutputTokens: 1024 }),

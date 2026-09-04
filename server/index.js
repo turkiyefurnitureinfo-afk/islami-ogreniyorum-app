@@ -189,11 +189,11 @@ async function broadcastPush(title, body, data = {}) {
 async function computeRecipients(trigger, triggerUserId, entityId) {
   const isBroadcast = trigger === 'new_question' || trigger === 'new_post';
   if (isBroadcast) {
-    // Rule 1 & 3: every registered user.
+    // Rule 1 & 3: every registered user EXCLUDING the triggering user.
     const devices = await storage.getAllDevices();
-    return [...new Set(devices.map((d) => String(d.userId)).filter(Boolean))];
+    return [...new Set(devices.map((d) => String(d.userId)).filter(Boolean))]
+      .filter((uid) => String(uid) !== String(triggerUserId));
   }
-
   // Rules 2 & 4: thread participants only (owner + prior authors).
   let participantIds;
   if (trigger === 'new_answer') {
@@ -920,3 +920,4 @@ storage.initStorage().then(() => {
     console.log(`Storage backend: ${storage.isFirestoreEnabled() ? 'Firestore ✅' : 'in-memory ⚠️'}`);
   });
 });
+

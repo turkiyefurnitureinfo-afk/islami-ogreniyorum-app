@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TextInput, Pressable, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, Pressable, Image, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
@@ -10,9 +10,10 @@ const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, han
   return (
     <SafeAreaView style={styles.authScreen}>
       <StatusBar style="light" />
+      <ScrollView contentContainerStyle={styles.authScrollContent}>
       <View style={styles.authCard}>
         <View style={styles.logoCircle}>
-          <Image source={require('./assets/icon.png')} style={{ width: 56, height: 56, borderRadius: 28 }} />
+          <Image source={appIcon} style={{ width: 56, height: 56, borderRadius: 28 }} />
         </View>
         
         <Text style={styles.welcomeLabel}>{getTranslation('welcome', 'Welcome')}</Text>
@@ -128,6 +129,7 @@ const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, han
           </Pressable>
         </View>
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 };

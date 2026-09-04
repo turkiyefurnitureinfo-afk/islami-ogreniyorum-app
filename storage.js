@@ -1,6 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Storage keys
+// =============
+// The storage split is now:
+//   PHONE ONLY (AsyncStorage): settings, prayerAlarms, welcomeShown,
+//     deletedItems, profileDirectory (cache), qanda/community (offline cache)
+//   CLOUD (backend): user account, profile (occupation/address/bio/picture),
+//     Q&A content, community content
+//
+// Q&A and community posts are kept on the phone as a FAST OFFLINE CACHE so
+// the feed renders instantly on launch. The cloud copy (written via
+// cloudSync.js) is authoritative and survives logout / uninstall.
 const KEYS = {
   ACCOUNT: '@app/account',
   PROFILE: '@app/profile',

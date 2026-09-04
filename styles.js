@@ -173,7 +173,8 @@ export function makeStyles(palette) {
 
     // ---------- Shared content ----------
     contentPadding: {
-      paddingBottom: 24,
+      paddingTop: 16,
+      paddingBottom: 32,
     },
     card: {
       backgroundColor: palette.card,
@@ -258,6 +259,9 @@ export function makeStyles(palette) {
     authScreen: {
       flex: 1,
       backgroundColor: palette.page,
+    },
+    authScrollContent: {
+      flexGrow: 1,
       justifyContent: 'center',
       paddingHorizontal: 20,
     },
@@ -267,6 +271,7 @@ export function makeStyles(palette) {
       padding: 24,
       borderWidth: 1,
       borderColor: palette.border,
+      marginVertical: 16,
     },
     logoCircle: {
       width: 64,
@@ -930,6 +935,7 @@ export function makeStyles(palette) {
     },
     communityMediaRow: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 8,
       marginBottom: 10,
     },
@@ -971,7 +977,7 @@ export function makeStyles(palette) {
       paddingVertical: 10,
       paddingHorizontal: 16,
       alignItems: 'center',
-      alignSelf: 'flex-start',
+      alignSelf: 'stretch',
     },
     communityShareButtonText: {
       color: '#08131a',
@@ -1218,6 +1224,9 @@ export function makeStyles(palette) {
       justifyContent: 'center',
       padding: 20,
     },
+    modalScroll: {
+      maxHeight: '85%',
+    },
     modalCard: {
       backgroundColor: palette.card,
       borderRadius: 14,
@@ -1225,6 +1234,7 @@ export function makeStyles(palette) {
       borderWidth: 1,
       borderColor: palette.border,
       width: '100%',
+      marginVertical: 4,
     },
     modalTitle: {
       color: palette.text,

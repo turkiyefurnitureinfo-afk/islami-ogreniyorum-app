@@ -2,7 +2,7 @@
   "expo": {
     "name": "İslamı öğreniyorum",
     "slug": "islami-ogreniyorum",
-    "version": "1.0.2",
+    "version": "1.0.5",
     "scheme": "com.joshua.islamiogreniyorum",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.joshua.islamiogreniyorum",
-      "versionCode": 20,
+      "versionCode": 23,
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {

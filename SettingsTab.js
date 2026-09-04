@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './config.js';
 import { clearAccount, clearAllData, saveProfile as persistProfile, loadProfile, saveAccount, saveProfileForEmail, loadProfileForEmail } from './storage.js';
 import { registerUserProfile, updateServerUser } from './notifications.js';
+import { cloudSaveProfile } from './cloudSync.js';
 import {
   isFirebaseConfigured,
   firebaseUpdatePassword,
@@ -244,6 +245,15 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       address: draftAddress.trim(),
       bio: draftBio.trim(),
     }).catch(() => {});
+
+    // CLOUD: authoritative write so the edit survives logout / uninstall.
+    try {
+      cloudSaveProfile(account.email || email, updated.fullName, updated.profilePicture, {
+        occupation: draftOccupation.trim(),
+        address: draftAddress.trim(),
+        bio: draftBio.trim(),
+      });
+    } catch (_e) { /* best-effort */ }
   };
 
   const saveEmail = () => {
@@ -470,6 +480,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     {/* ---- Edit Profile Modal ---- */}
       <Modal visible={profileModalOpen} transparent animationType="fade" onRequestClose={() => setProfileModalOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('editProfileTitle', 'Edit Profile')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('editProfileMessage', 'Update your account information below.')}</Text>
@@ -556,12 +567,14 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
               </Pressable>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
       {/* ---- Change Email Modal ---- */}
       <Modal visible={emailModalOpen} transparent animationType="fade" onRequestClose={() => setEmailModalOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('changeEmailTitle', 'Change Email')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('changeEmailMessage', 'Enter your new email address.')}</Text>
@@ -588,12 +601,14 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
               </Pressable>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
       {/* ---- Change Password Modal ---- */}
       <Modal visible={passwordModalOpen} transparent animationType="fade" onRequestClose={() => setPasswordModalOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('changePasswordTitle', 'Change Password')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('changePasswordMessage', 'For security, enter your current password, then create your new password.')}</Text>
@@ -641,12 +656,14 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
               </Pressable>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
       {/* ---- Profile Picture Source Modal ---- */}
       <Modal visible={pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(false)}>
         <View style={styles.modalBackdrop}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('profilePictureTitle', 'Profile Picture')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('profilePictureMessage', 'Choose a source for your new profile picture.')}</Text>
@@ -679,6 +696,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
               </Pressable>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 

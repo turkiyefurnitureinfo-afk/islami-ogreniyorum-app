@@ -101,6 +101,7 @@ import {
   signInWithEmailLink,
   isEmailSignInLink,
 } from './firebaseAuth.js';
+import { cloudSaveProfile, cloudFetchProfile } from './cloudSync.js';
 
 /** Resolve the promise unless it takes longer than `ms`, in which case resolve
  *  with `fallback`. Keeps button spinners from hanging on a stalled socket. */
@@ -196,15 +197,24 @@ const [profileDirectory, setProfileDirectory] = useState({});
         setSignedIn(true);
       }
 
-      // Per-email profile: each account's occupation/address/bio/picture is
-      // stored under its own key (legacy single-key record is the fallback).
+      // Profile is stored in the CLOUD (backend). On startup we try the cloud
+      // first so logout / uninstall / device change never loses data. The
+      // on-device copy is only a fast cache for offline startup.
       const profileEmail =
         (savedAccount && savedAccount.email) ||
         (savedAccount && savedAccount.pendingEmail) ||
         null;
-      const savedProfile = profileEmail
-        ? (await loadProfileForEmail(profileEmail)) || (await loadProfile())
-        : await loadProfile();
+      let savedProfile = null;
+      if (profileEmail) {
+        try {
+          savedProfile = await cloudFetchProfile(profileEmail);
+        } catch (_e) { /* offline — fall through to device cache */ }
+      }
+      if (!savedProfile) {
+        savedProfile = profileEmail
+          ? (await loadProfileForEmail(profileEmail)) || (await loadProfile())
+          : await loadProfile();
+      }
       if (savedProfile) {
         setOccupation(savedProfile.occupation || '');
         setAddress(savedProfile.address || '');
@@ -760,6 +770,13 @@ const [profileDirectory, setProfileDirectory] = useState({});
             bio: '',
           }).catch(() => {});
 
+          // CLOUD: write the full profile to the backend so it survives logout / uninstall.
+          cloudSaveProfile(accountToSave.email, accountToSave.fullName, accountToSave.profilePicture, {
+            occupation: '',
+            address: '',
+            bio: '',
+          }).catch(() => {});
+
           // Register this device with the push notification backend
           registerDeviceWithBackend(accountToSave.email, accountToSave.fullName);
         }
@@ -826,6 +843,13 @@ const [profileDirectory, setProfileDirectory] = useState({});
         }).catch(() => {});
 
         registerUserProfile(merged.email, merged.fullName, null, merged.profilePicture || null);
+        // CLOUD: ensure the profile is written to the backend on every login
+        // so a fresh install that pulls from cloud sees the latest data.
+        cloudSaveProfile(merged.email, merged.fullName, merged.profilePicture, {
+          occupation: '',
+          address: '',
+          bio: '',
+        }).catch(() => {});
         registerDeviceWithBackend(merged.email, merged.fullName);
       } catch (error) {
         Alert.alert(
@@ -918,6 +942,13 @@ const [profileDirectory, setProfileDirectory] = useState({});
     });
     // Mirror the Google account on the backend (best-effort).
     registerUserProfile(result.user.email, result.user.name, null, result.user.picture || null);
+
+    // CLOUD: write the full profile so it survives logout / uninstall.
+    cloudSaveProfile(result.user.email, result.user.name, result.user.picture || null, {
+      occupation: '',
+      address: '',
+      bio: '',
+    }).catch(() => {});
 
     // Register this device with the push notification backend
     registerDeviceWithBackend(result.user.email, result.user.name);
@@ -1028,6 +1059,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
       setIsGoogleUser(false);
       saveAccount(emailLinkAccount);
       registerUserProfile(user.email || email, user.displayName || account.fullName, null, account.profilePicture || null);
+      // CLOUD: write the full profile so it survives logout / uninstall.
+      cloudSaveProfile(user.email || email, user.displayName || account.fullName, account.profilePicture || null, {
+        occupation: '',
+        address: '',
+        bio: '',
+      }).catch(() => {});
       registerDeviceWithBackend(user.email || email, user.displayName || account.fullName);
       setEmailLinkPending(false);
       setEmailLinkSent(false);
@@ -1062,17 +1099,15 @@ const [profileDirectory, setProfileDirectory] = useState({});
       }
     }
     setProfilePicture(finalPicture);
-    // Save profile data to profile storage
+    // Persist to BOTH device cache (fast offline access) AND cloud (survives
+    // logout / uninstall / device change). The cloud copy is authoritative.
     saveProfile({ occupation, address, bio, profilePicture: finalPicture });
-    // Also update the account with the profile picture so it persists across sessions
     const updatedAccount = { ...account, profilePicture: finalPicture || '' };
     setAccount(updatedAccount);
     saveAccount(updatedAccount);
     setIsNewUser(false);
     setProfileSetupComplete(true);
     if (account.email) {
-      // Persist the signup profile PER EMAIL (device + server) so it's
-      // editable later in Settings → Edit Profile and survives reinstalls.
       const prof = {
         occupation,
         address,
@@ -1081,11 +1116,9 @@ const [profileDirectory, setProfileDirectory] = useState({});
         profilePicture: finalPicture || '',
       };
       saveProfileForEmail(account.email, prof).catch(() => {});
-      // Mirror to the backend (best-effort) so the avatar survives reinstalls
-      // and renders on other users' devices too.
-      updateServerUser(account.email, {
-        profilePicture: finalPicture || '',
-        fullName: prof.fullName,
+      // CLOUD: always write the full profile to the backend so it survives
+      // logout / uninstall. This is the authoritative copy now.
+      cloudSaveProfile(account.email, prof.fullName, prof.profilePicture, {
         occupation: prof.occupation,
         address: prof.address,
         bio: prof.bio,
@@ -1119,17 +1152,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
     // Open this question's card so the user immediately sees "AI is thinking..."
     setExpandedQas(prev => ({ ...prev, [questionId]: true }));
     setPostingQuestion(true);
-
-    // Notify the community about the new question
-    if (notificationsOn) {
-      sendImmediateNotification(
-        language === 'tr' ? 'Yeni Soru' : 'New Question',
-        language === 'tr'
-          ? `Toplulukta yeni soru soruldu: "${askedText.slice(0, 60)}${askedText.length > 60 ? '...' : ''}"`
-          : `A new question was asked: "${askedText.slice(0, 60)}${askedText.length > 60 ? '...' : ''}"`,
-        notificationSound === 'Sessiz' || notificationSound === 'Silent' ? null : undefined
-      );
-    }
 
     // Register the question with the backend so other users get a push,
     // then store the server-assigned ID on this question so later answers
@@ -1342,16 +1364,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
           .catch(() => {});
       }
 
-      // Notify about the new answer
-      if (notificationsOn) {
-        sendImmediateNotification(
-          language === 'tr' ? 'Yeni Cevap' : 'New Answer',
-          language === 'tr'
-            ? `Sorunuzuna yeni cevap geldi: "${answerText.slice(0, 60)}${answerText.length > 60 ? '...' : ''}"`
-            : `Your question got a new answer: "${answerText.slice(0, 60)}${answerText.length > 60 ? '...' : ''}"`,
-          notificationSound === 'Sessiz' || notificationSound === 'Silent' ? null : undefined
-        );
-      }
     }
   };
 
@@ -1854,16 +1866,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
         );
       }
 
-      // Notify the community about the new post
-      if (notificationsOn) {
-        sendImmediateNotification(
-          language === 'tr' ? 'Yeni Gönderi' : 'New Post',
-          language === 'tr'
-            ? `Toplulukta yeni gönderi paylaşıldı: "${newPostText.slice(0, 60)}${newPostText.length > 60 ? '...' : ''}"`
-            : `A new post was shared: "${newPostText.slice(0, 60)}${newPostText.length > 60 ? '...' : ''}"`,
-          notificationSound === 'Sessiz' || notificationSound === 'Silent' ? null : undefined
-        );
-      }
     } finally {
       setSharingPost(false);
     }
@@ -1977,16 +1979,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
         ).catch(() => {});
       }
 
-      // Notify about the new comment
-      if (notificationsOn) {
-        sendImmediateNotification(
-          language === 'tr' ? 'Yeni Yorum' : 'New Comment',
-          language === 'tr'
-            ? `Gönderinize yeni yorum geldi: "${commentText.slice(0, 60)}${commentText.length > 60 ? '...' : ''}"`
-            : `Your post got a new comment: "${commentText.slice(0, 60)}${commentText.length > 60 ? '...' : ''}"`,
-          notificationSound === 'Sessiz' || notificationSound === 'Silent' ? null : undefined
-        );
-      }
     }
   };
 

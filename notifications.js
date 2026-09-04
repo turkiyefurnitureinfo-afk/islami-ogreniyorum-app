@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { API_URL, SECURITY_CONFIG } from './config.js';
 import { getSecurityHeaders, checkRateLimit, validatePinningConfig } from './security.js';
+import { getCurrentFirebaseUser } from './firebaseAuth.js';
 
 // Configure how notifications are presented while the app is in the foreground
 Notifications.setNotificationHandler({
@@ -59,22 +60,14 @@ function resolveSoundMode(soundOption) {
 // falls back to trusting the client-supplied userId — exactly the previous
 // behaviour, so nothing breaks for guests/legacy builds.
 // ---------------------------------------------------------------------------
-let authModule = null; // lazily required to avoid importing Firebase at load time
-function getAuthModule() {
-  if (authModule !== null) return authModule;
-  try {
-    authModule = require('./firebaseAuth.js');
-  } catch (_e) {
-    authModule = false;
-  }
-  return authModule;
-}
 
+/**
+ * Get a fresh Firebase ID token for the currently signed-in user.
+ * @returns {Promise<string|null>} The ID token, or null if unavailable.
+ */
 async function currentIdToken() {
-  const fb = getAuthModule();
-  if (!fb) return null;
   try {
-    const user = fb.getCurrentFirebaseUser();
+    const user = getCurrentFirebaseUser();
     if (user && typeof user.getIdToken === 'function') {
       // getIdToken(true) forces a fresh token; fall back to cached if needed.
       return await user.getIdToken(true);

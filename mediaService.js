@@ -34,8 +34,15 @@
 //   anonymous sign-in below satisfies it automatically.)
 // ---------------------------------------------------------------------------
 
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getFirebaseApp } from './aiLogic.js';
+// Lazy imports for Firebase Web SDK - only loaded when media upload is used
+let _firebaseStorage = null;
+
+async function getFirebaseStorageModules() {
+  if (!_firebaseStorage) {
+    _firebaseStorage = await import('firebase/storage');
+  }
+  return _firebaseStorage;
+}
 
 // Matches the 50 MB limit written into the Storage rules above.
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
@@ -64,14 +71,19 @@ export async function uploadCommunityMedia(uri, type) {
     );
   }
 
-  const storage = getStorage(getFirebaseApp());
+  // Lazy load Firebase Storage modules
+  const firebaseStorage = await getFirebaseStorageModules();
+  const { getFirebaseApp } = await import('./aiLogic.js');
+  const app = await getFirebaseApp();
+  
+  const storage = firebaseStorage.getStorage(app);
   const path =
     `community/media/${Date.now()}-` +
     `${Math.random().toString(36).slice(2, 8)}.${extension}`;
-  const fileRef = ref(storage, path);
+  const fileRef = firebaseStorage.ref(storage, path);
 
-  await uploadBytes(fileRef, blob, { contentType });
-  return getDownloadURL(fileRef);
+  await firebaseStorage.uploadBytes(fileRef, blob, { contentType });
+  return firebaseStorage.getDownloadURL(fileRef);
 }
 
 /**
@@ -99,12 +111,18 @@ export async function uploadProfileImage(uri) {
 
   // Local file -> Blob (React Native's fetch supports file:// URIs).
   const blob = await (await fetch(uri)).blob();
-  const storage = getStorage(getFirebaseApp());
+  
+  // Lazy load Firebase Storage modules
+  const firebaseStorage = await getFirebaseStorageModules();
+  const { getFirebaseApp } = await import('./aiLogic.js');
+  const app = await getFirebaseApp();
+  
+  const storage = firebaseStorage.getStorage(app);
   const path =
     `community/avatars/${Date.now()}-` +
     `${Math.random().toString(36).slice(2, 8)}.jpg`;
-  const fileRef = ref(storage, path);
+  const fileRef = firebaseStorage.ref(storage, path);
 
-  await uploadBytes(fileRef, blob, { contentType: 'image/jpeg' });
-  return getDownloadURL(fileRef);
+  await firebaseStorage.uploadBytes(fileRef, blob, { contentType: 'image/jpeg' });
+  return firebaseStorage.getDownloadURL(fileRef);
 }

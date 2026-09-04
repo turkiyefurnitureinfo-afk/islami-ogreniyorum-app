@@ -21,7 +21,7 @@ const WelcomeScreen = ({ styles, palette, t, now, account, setWelcomeScreenShown
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.page }]}>
       <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
-      <ScrollView contentContainerStyle={[styles.contentPadding, { justifyContent: 'center', flex: 1 }]}>
+      <ScrollView contentContainerStyle={[styles.contentPadding, { justifyContent: 'center', minHeight: '100%' }]}>
         <View style={styles.welcomeCard}>
           <Text style={styles.welcomeGreeting}>
             {getTranslation('greeting', 'Welcome')}

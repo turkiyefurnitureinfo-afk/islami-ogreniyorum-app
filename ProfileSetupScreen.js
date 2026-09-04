@@ -25,7 +25,7 @@ const ProfileSetupScreen = ({ styles, palette, t, account, setAccount, occupatio
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.page }]}>
       <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
-      <ScrollView contentContainerStyle={styles.contentPadding}>
+      <ScrollView contentContainerStyle={[styles.contentPadding, { paddingBottom: 48 }]}>
         <View style={styles.setupCard}>
           <Text style={styles.mainTitle}>{getTranslation('completeYourProfile', 'Complete Your Profile')}</Text>
           <Text style={styles.subtitle}>{getTranslation('canChangeLater', 'You can change this information later in Settings.')}</Text>
