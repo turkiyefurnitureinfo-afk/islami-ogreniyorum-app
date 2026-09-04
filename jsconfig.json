@@ -8,6 +8,7 @@
   // type-checking inside node_modules entirely.
   "compilerOptions": {
     "jsx": "react-jsx",
+    "jsxImportSource": "react",
     "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -18,6 +19,8 @@
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "typeRoots": ["./node_modules/@types"],
+    "types": ["react", "react-native"],
     "maxNodeModuleJsDepth": 0,
     "noEmit": true
   },
