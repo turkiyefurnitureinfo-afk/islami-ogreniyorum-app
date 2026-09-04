@@ -3,6 +3,8 @@ import { View, Text, TextInput, Pressable, Image, ActivityIndicator, ScrollView 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
+const appIcon = require('./assets/icon.png');
+
 const AuthScreen = ({ styles, t, authMode, setAuthMode, account, setAccount, handleAuthAction, handleForgotPassword, handleGoogleSignIn, handleSendEmailLink, emailLinkSent, authBusy }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
