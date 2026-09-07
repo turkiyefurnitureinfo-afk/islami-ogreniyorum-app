@@ -88,15 +88,28 @@ android {
     compileSdk = rootProject.ext.compileSdkVersion
 
     namespace = 'com.joshua.islamiogreniyorum'
-    buildFeatures {
+        buildFeatures {
         buildConfig = true
+    }
+    // Align Java & Kotlin bytecode targets to 17. Expo SDK 53 / expo-dev-menu
+    // ships Compose libraries compiled with Kotlin 2.2.0 metadata that require
+    // a Java 17 source/target. AGP 8.9.1 defaults may otherwise pick a different
+    // target, causing expo-camera / expo-dev-menu Kotlin compilation failures
+    // (e.g. "incompatible class file major version" / metadata version mismatches).
+    // https://github.com/expo/expo/issues/25982
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
     }
     defaultConfig {
         applicationId = 'com.joshua.islamiogreniyorum'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 20
-        versionName "1.0.2"
+        versionCode 23
+        versionName "1.0.3"
     }
     signingConfigs {
         debug {
@@ -106,13 +119,42 @@ android {
             keyPassword 'android'
         }
         release {
-            // Uses the MYAPP_UPLOAD_* properties in android/gradle.properties.
-            // Fallback to the debug store when those are not defined (e.g. a
-            // fresh checkout), so ./gradlew assembleRelease always succeeds.
-            storeFile file(findProperty('MYAPP_UPLOAD_STORE_FILE') ?: 'debug.keystore')
-            storePassword findProperty('MYAPP_UPLOAD_STORE_PASSWORD') ?: 'android'
-            keyAlias findProperty('MYAPP_UPLOAD_KEY_ALIAS') ?: 'androiddebugkey'
-            keyPassword findProperty('MYAPP_UPLOAD_KEY_PASSWORD') ?: 'android'
+            // Signing priority (first available wins):
+            //  1. EAS keystore (fetched via scripts/fetch-keystore.js) — matches
+            //     the APK distributed through EAS builds / installed devices.
+            //  2. MYAPP_UPLOAD_* properties (my-release-key.jks) — legacy.
+            //  3. Debug keystore fallback so assembleRelease never hard-fails
+            //     on a fresh checkout.
+            // NOTE: `file()` resolves relative to android/app/, so the store
+            // file property must be a bare filename that lives in android/app/.
+            def easProps = new Properties()
+            def easPropsFile = rootProject.file('eas-credentials.properties')
+            if (easPropsFile.exists()) {
+                easPropsFile.withInputStream { easProps.load(it) }
+            }
+            def easStoreFile = easProps.getProperty('EAS_UPLOAD_STORE_FILE')
+            def easAvailable = easStoreFile && file(easStoreFile).exists()
+            def storeFileName
+            if (easAvailable) {
+                storeFileName = easStoreFile
+                println "Release signing: EAS keystore (${easStoreFile})"
+            } else if (findProperty('MYAPP_UPLOAD_STORE_FILE') && file(findProperty('MYAPP_UPLOAD_STORE_FILE')).exists()) {
+                storeFileName = findProperty('MYAPP_UPLOAD_STORE_FILE')
+                println "Release signing: MYAPP_UPLOAD keystore (${storeFileName})"
+            } else {
+                storeFileName = 'debug.keystore'
+                println 'Release signing: DEBUG keystore fallback (no release keystore found!)'
+            }
+            storeFile file(storeFileName)
+            storePassword (easAvailable
+                ? easProps.getProperty('EAS_UPLOAD_STORE_PASSWORD')
+                : (findProperty('MYAPP_UPLOAD_STORE_PASSWORD') ?: 'android'))
+            keyAlias (easAvailable
+                ? easProps.getProperty('EAS_UPLOAD_KEY_ALIAS')
+                : (findProperty('MYAPP_UPLOAD_KEY_ALIAS') ?: 'androiddebugkey'))
+            keyPassword (easAvailable
+                ? easProps.getProperty('EAS_UPLOAD_KEY_PASSWORD')
+                : (findProperty('MYAPP_UPLOAD_KEY_PASSWORD') ?: 'android'))
         }
     }
     buildTypes {
