@@ -85,8 +85,10 @@ export async function fetchJsonWithRetry(url, options = {}, retries = 2, timeout
 }
 
 export function computeTimes(now, latitude, longitude, tz, methodKey = 'diyanet') {
-  const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 0));
-  // Explicit getTime() form — numerically identical to Date subtraction.
+  // Use local date for dayOfYear to avoid off-by-one near midnight for users
+  // in positive UTC offsets (e.g., UTC+3 in Turkey). Prayer times are displayed
+  // in local time, so the calculation should use the local day.
+  const startOfYear = new Date(now.getFullYear(), 0, 0);
   const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000);
 
   const decl = sunDeclination(dayOfYear);

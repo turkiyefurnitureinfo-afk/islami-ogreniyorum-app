@@ -2,18 +2,18 @@ import React from 'react';
 import { ScrollView, View, Text, Pressable, Linking } from 'react-native';
 
 const NewsTab = ({ styles, projectEvents, t, newsItems, scholarVideos }) => {
-  const items = newsItems && newsItems.length > 0 ? newsItems : null;
-  const videos = scholarVideos && scholarVideos.length > 0 ? scholarVideos : null;
+  const hasNews = newsItems && newsItems.length > 0;
+  const hasVideos = scholarVideos && scholarVideos.length > 0;
 
   return (
     <ScrollView contentContainerStyle={styles.contentPadding}>
       {/* Live news & events collected from reliable Turkish Muslim sources */}
-      {items && (
+      {hasNews && (
         <View style={{ marginBottom: 20 }}>
           <Text style={[styles.sectionHeading, { marginTop: 4 }]}>
             {t?.liveNews || 'Haberler & Etkinlikler'}
           </Text>
-          {items.map((item, index) => (
+          {newsItems.map((item, index) => (
             <Pressable
               key={item.id || index}
               style={styles.eventBlock}
@@ -31,12 +31,12 @@ const NewsTab = ({ styles, projectEvents, t, newsItems, scholarVideos }) => {
       {/* Live messages from great Islamic scholars on YouTube.
           Tapping a video opens it on YouTube; the channel link opens the
           scholar's channel directly. */}
-      {videos && (
+      {hasVideos && (
         <View style={{ marginBottom: 20 }}>
           <Text style={[styles.sectionHeading, { marginTop: 4 }]}>
             {t?.scholarVideos || '📺 Alimlerden Video Mesajlar'}
           </Text>
-          {videos.map((item, index) => (
+          {scholarVideos.map((item, index) => (
             <Pressable
               key={item.id || index}
               style={styles.eventBlock}
@@ -71,7 +71,7 @@ const NewsTab = ({ styles, projectEvents, t, newsItems, scholarVideos }) => {
       )}
 
       {/* Project developments changelog */}
-      <Text style={styles.sectionHeading}>{t.projectDevelopments}</Text>
+      <Text style={styles.sectionHeading}>{t?.projectDevelopments || 'Project Developments'}</Text>
       {projectEvents.map(event => (
         <View key={event.version} style={styles.eventBlock}>
           <Text style={styles.versionHeader}>{event.version} / {event.date}</Text>

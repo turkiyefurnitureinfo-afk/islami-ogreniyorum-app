@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+
 // Central configuration for the app.
 // ============================================================
 // PRODUCTION CONFIGURATION
@@ -9,19 +11,22 @@
 //   - Support email-> info@learningislamapp.com
 // ============================================================
 
+const extra = Constants?.expoConfig?.extra || {};
+
 // The main backend API (push notifications, AI answers, events).
 // Live on Render (free tier) at islami-ogreniyorum-server.onrender.com
-export const API_URL = 'https://islami-ogreniyorum-server.onrender.com';
+// Can be overridden via app.json -> expo.extra.apiUrl
+export const API_URL = extra.apiUrl || 'https://islami-ogreniyorum-server.onrender.com';
 
 // Privacy policy URL - required by Apple App Store & Google Play.
 // Served live by the backend itself (see server/index.js -> GET /privacy),
 // so this always works even though learningislamapp.com has no DNS yet.
 // If you later point that domain at a real host, switch back to
 // https://learningislamapp.com/privacy and rebuild the app.
-export const PRIVACY_POLICY_URL = 'https://islami-ogreniyorum-server.onrender.com/privacy';
+export const PRIVACY_POLICY_URL = extra.privacyPolicyUrl || `${API_URL}/privacy`;
 
 // Support / contact email shown in Settings.
-export const SUPPORT_EMAIL = 'info@learningislamapp.com';
+export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
 
 // ---------------------------------------------------------------------------
 // Firebase Authentication (email + password)
@@ -117,8 +122,14 @@ export const PINNED_CERTIFICATE_HASHES = [
 
 // Request signing: adds HMAC-SHA256 signature to API requests for tamper detection.
 // The server should validate this signature. This is a shared secret between app and server.
-// IMPORTANT: In production, retrieve this from a secure key exchange, never hardcode.
-export const REQUEST_SIGNING_KEY = 'islami-ogreniyorum-secure-signing-key-2024';
+// Read from expo-constants (app.json) so it can be changed at build time.
+// SECURITY: Must be set in app.json -> expo.extra.requestSigningKey for production builds
+export const REQUEST_SIGNING_KEY = Constants?.expoConfig?.extra?.requestSigningKey || null;
+
+// Warn if request signing key is not configured
+if (!REQUEST_SIGNING_KEY && __DEV__) {
+  console.warn('[SECURITY WARNING] REQUEST_SIGNING_KEY is not configured. Set it in app.json -> expo.extra.requestSigningKey');
+}
 
 // Rate limiting: client-side throttle to prevent accidental API flooding.
 // Limits are per-endpoint within the specified window.
@@ -146,8 +157,9 @@ export const RATE_LIMITS = {
 };
 
 // Enable/disable security features (useful for development)
+// SECURITY: In production, enable certificate pinning with real certificate hashes
 export const SECURITY_CONFIG = {
-  enableCertificatePinning: false,  // Set to true after configuring PINNED_CERTIFICATE_HASHES
-  enableRequestSigning: true,       // Adds X-Request-Signature header to API calls
+  enableCertificatePinning: PINNED_CERTIFICATE_HASHES.length > 0, // Auto-enable when hashes are configured
+  enableRequestSigning: REQUEST_SIGNING_KEY !== null, // Auto-enable when key is configured
   enableRateLimit: true,            // Client-side rate limiting
 };

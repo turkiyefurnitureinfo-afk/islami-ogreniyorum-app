@@ -16,8 +16,15 @@ export function getDeviceLocale() {
     if (Platform.OS === 'android') {
       return I18nManager.getConstants().localeIdentifier || 'en';
     }
-    // Web
-    return (typeof navigator !== 'undefined' && navigator.language) || 'en';
+    // Web - with additional safety check for navigator
+    try {
+      if (typeof navigator !== 'undefined' && navigator && typeof navigator.language === 'string') {
+        return navigator.language;
+      }
+    } catch {
+      // Fall through to default
+    }
+    return 'en';
   } catch (e) {
     return 'en';
   }

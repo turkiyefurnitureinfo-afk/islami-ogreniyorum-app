@@ -204,10 +204,13 @@ const CommunityTab = ({
     parentPostId: post.id,
   });
 
-  const handleBlockUser = (userName) => {
-    // TODO: Store blocked users and filter their content
-    console.log(`Blocked user: ${userName}`);
-  };
+  // Blocking goes through the same report dialog as the ⚑ flag, so the
+  // author's email is available for App to persist in blockedUsers.
+  const handleBlockUser = (post) => onReport?.({
+    contentType: 'post',
+    contentId: String(post.id),
+    authorEmail: post.ownerEmail,
+  });
 
   return (
     <ScrollView 
@@ -296,7 +299,7 @@ const CommunityTab = ({
             <Pressable onPress={() => reportPost(post)} style={{ padding: 4 }}>
               <Text style={{ color: '#e05d5d', fontSize: 14 }}>⚑</Text>
             </Pressable>
-            <Pressable onPress={() => handleBlockUser(post.user.name)} style={{ padding: 4 }}>
+            <Pressable onPress={() => handleBlockUser(post)} style={{ padding: 4 }}>
               <Text style={{ color: palette.muted, fontSize: 12 }}>⛔</Text>
             </Pressable>
           </View>

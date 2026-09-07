@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Pressable, ScrollView, View, Text, Switch } from 'react-native';
 import { fmt } from './utils.js';
 import { ALARM_OFFSET_OPTIONS } from './prayerAlarms.js';
@@ -27,7 +27,7 @@ const PrayerTab = ({
       <View style={styles.card}>
         <View style={styles.locationRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.cardLabel}>{t.location}</Text>
+            <Text style={styles.cardLabel}>{t?.location || 'Location'}</Text>
             <Text style={styles.locationName}>{locationName}</Text>
             {!!sourceLabel && (
               <Text style={styles.settingValue}>{sourceLabel}</Text>
@@ -42,21 +42,21 @@ const PrayerTab = ({
             disabled={locating}
           >
             <Text style={styles.locationButtonText}>
-              {locating ? t.detecting : t.detectLocation}
+              {locating ? (t?.detecting || 'Detecting...') : (t?.detectLocation || 'Detect Location')}
             </Text>
           </Pressable>
         </View>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTag}>{t.nextPrayer}</Text>
+        <Text style={styles.sectionTag}>{t?.nextPrayer || 'Next Prayer'}</Text>
         <View style={styles.clearRow}>
           <View>
-            <Text style={styles.cardLabel}>{t[nextPrayer.key] || t.fajr}</Text>
-            <Text style={styles.primaryPrayer}>{fmt(nextPrayer.time % 1440)}</Text>
+            <Text style={styles.cardLabel}>{t?.[nextPrayer.key] || t?.fajr || 'Fajr'}</Text>
+            <Text style={styles.primaryPrayer}>{fmt(nextPrayer.time)}</Text>
           </View>
           <View style={styles.rightAligned}>
-            <Text style={styles.cardLabel}>{t.remaining}</Text>
+            <Text style={styles.cardLabel}>{t?.remaining || 'Remaining'}</Text>
             <Text style={styles.timerText}>
               {String(diffHours).padStart(2, '0')}:{String(diffMinutes).padStart(2, '0')}:{String(diffSeconds).padStart(2, '0')}
             </Text>
@@ -66,12 +66,12 @@ const PrayerTab = ({
 
       <View style={styles.listWrap}>
         {[
-          { key: 'fajr', label: t.fajr },
-          { key: 'sunrise', label: t.sunrise },
-          { key: 'dhuhr', label: t.dhuhr },
-          { key: 'asr', label: t.asr },
-          { key: 'maghrib', label: t.maghrib },
-          { key: 'isha', label: t.isha },
+          { key: 'fajr', label: t?.fajr || 'Fajr' },
+          { key: 'sunrise', label: t?.sunrise || 'Sunrise' },
+          { key: 'dhuhr', label: t?.dhuhr || 'Dhuhr' },
+          { key: 'asr', label: t?.asr || 'Asr' },
+          { key: 'maghrib', label: t?.maghrib || 'Maghrib' },
+          { key: 'isha', label: t?.isha || 'Isha' },
         ].map((item) => (
           <View key={item.key} style={styles.rowItem}>
             <View style={styles.leftGroup}>
@@ -100,7 +100,7 @@ const PrayerTab = ({
           const entry = (prayerAlarms && prayerAlarms[key]) || null;
           const isSunrise = key === 'sunrise';
           const cfg = entry || { enabled: false, offsetMinutes: 0 };
-          const label = t[key] || key;
+          const label = t?.[key] || key;
           // The fire time shown = prayer time minus the chosen offset.
           const fire = entry && Number.isFinite(times && times[key])
             ? Math.max(0, times[key] - (cfg.offsetMinutes || 0))

@@ -1,128 +1,111 @@
 // ---------------------------------------------------------------------------
 // Firebase Storage — hosts community post media (images / videos)
 // ---------------------------------------------------------------------------
+//
 // WHY THIS EXISTS: the community feed stores only METADATA in Firestore
 // (mediaType + mediaUri). It used to receive the author's device-local path
 // (file:///data/.../ImagePicker/xxx.jpg) — a path that exists on no other
 // device, so images/videos were broken for everyone except the author (and
-// broke for the author too once Android cleared the cache). This module
-// uploads the picked file to Firebase Storage first and returns a permanent
-// https:// download URL, which is what gets stored in Firestore and rendered
-// by every device.
+// broke for the author too once Android cleared the cache).
 //
-// ONE-TIME SETUP (Firebase Console):
-//   Build → Storage → Get started (the default bucket
-//   islami-ogreniyorum.firebasestorage.app already exists in this project),
-//   then set these RULES (Storage → Rules):
-//
-//     rules_version = '2';
-//     service firebase.storage {
-//       match /b/{bucket}/o {
-//         match /community/media/{fileName} {
-//           allow read: if true;
-//           allow write: if request.resource.size < 50 * 1024 * 1024
-//             && (request.resource.contentType.matches('image/.*')
-//                 || request.resource.contentType.matches('video/.*'));
-//         }
-//       }
-//     }
-//
-//   (Reads are public because community posts are public in the app; writes
-//   are capped at 50 MB and to image/video MIME types. Optional hardening:
-//   enable Anonymous sign-in in Authentication and add
-//   `&& request.auth != null` to the write rule, then this module's
-//   anonymous sign-in below satisfies it automatically.)
+// HOW IT WORKS NOW (server-backed upload): on-device Firebase Web-SDK
+// (firebase/storage) does NOT run in React Native, which is why media was
+// never actually uploaded and always fell back to a local path. Instead we
+// POST the file to the backend (POST /api/upload), which stores it and returns
+// a permanent public https:// URL. That URL is what gets stored in Firestore
+// and rendered by every device.
 // ---------------------------------------------------------------------------
 
-// Lazy imports for Firebase Web SDK - only loaded when media upload is used
-let _firebaseStorage = null;
+import { API_URL } from './config.js';
+import { getSecurityHeaders } from './security.js';
 
-async function getFirebaseStorageModules() {
-  if (!_firebaseStorage) {
-    _firebaseStorage = await import('firebase/storage');
-  }
-  return _firebaseStorage;
-}
-
-// Matches the 50 MB limit written into the Storage rules above.
+// Matches the 50 MB limit enforced by the server upload endpoint.
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 
 /**
- * Upload a picked image/video to Firebase Storage.
+ * Upload a picked image/video to the backend, which stores it and returns a
+ * permanent public URL.
  *
- * @param {string} uri - local file URI from expo-image-picker (file://…)
+ * @param {string} uri - local file URI (file://…) or data URI
  * @param {'image'|'video'} type - media kind (picks extension + MIME type)
- * @returns {Promise<string>} permanent https:// download URL for the file
- * @throws {Error} when Storage isn't set up, the file is too large, or the
- *   upload fails (network / rules). Callers should fall back to keeping the
- *   local file so the author's own preview still works.
+ * @returns {Promise<string>} permanent public URL for the file
+ * @throws {Error} when the upload fails (network / server error).
  */
 export async function uploadCommunityMedia(uri, type) {
   if (!uri) throw new Error('No media URI provided');
   const isVideo = type === 'video';
-  const contentType = isVideo ? 'video/mp4' : 'image/jpeg';
   const extension = isVideo ? 'mp4' : 'jpg';
 
-  // Local file -> Blob (React Native's fetch supports file:// URIs).
-  const blob = await (await fetch(uri)).blob();
+  const dataUri = await fileToDataUri(uri);
+  const { url } = await fetch(`${API_URL}/api/upload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await getSecurityHeaders('POST', '/api/upload', null)),
+    },
+    body: JSON.stringify({ data: dataUri, ext: extension }),
+  }).then((res) => {
+    if (!res.ok) throw new Error(`Upload failed (HTTP ${res.status})`);
+    return res.json();
+  });
+
+  if (!url) throw new Error('Upload returned no URL');
+  return url.startsWith('http') ? url : `${API_URL}${url}`;
+}
+
+/**
+ * Upload a profile picture to the backend and return a permanent public URL.
+ *
+ * @param {string} uri - local file URI (file://…) from the image picker.
+ *   Already-remote http(s) URLs are returned unchanged (nothing to upload).
+ * @returns {Promise<string>} permanent public URL for the picture
+ * @throws {Error} when the upload fails (network / server error).
+ */
+export async function uploadProfileImage(uri) {
+  if (!uri) throw new Error('No image URI provided');
+  if (!/^file:/i.test(uri) && !uri.startsWith('/') && !/^data:/i.test(uri)) {
+    // Already a remote URL (Google avatar or a previously uploaded picture).
+    return uri;
+  }
+
+  const dataUri = await fileToDataUri(uri);
+  const { url } = await fetch(`${API_URL}/api/upload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await getSecurityHeaders('POST', '/api/upload', null)),
+    },
+    body: JSON.stringify({ data: dataUri, ext: 'jpg' }),
+  }).then((res) => {
+    if (!res.ok) throw new Error(`Upload failed (HTTP ${res.status})`);
+    return res.json();
+  });
+
+  if (!url) throw new Error('Upload returned no URL');
+  return url.startsWith('http') ? url : `${API_URL}${url}`;
+}
+
+/**
+ * Convert a local file:// URI to a base64 data-URI string.
+ * Handles both RN file:// paths and already-loaded data: URIs.
+ * @param {string} uri
+ * @returns {Promise<string>}
+ */
+async function fileToDataUri(uri) {
+  if (/^data:/i.test(uri)) return uri;
+  // React Native's fetch can read local file:// URIs.
+  const response = await fetch(uri);
+  const blob = await response.blob();
   if (blob && blob.size > MAX_MEDIA_BYTES) {
     throw new Error(
       `Media is ${(blob.size / (1024 * 1024)).toFixed(1)} MB — the limit is 50 MB.`
     );
   }
-
-  // Lazy load Firebase Storage modules
-  const firebaseStorage = await getFirebaseStorageModules();
-  const { getFirebaseApp } = await import('./aiLogic.js');
-  const app = await getFirebaseApp();
-  
-  const storage = firebaseStorage.getStorage(app);
-  const path =
-    `community/media/${Date.now()}-` +
-    `${Math.random().toString(36).slice(2, 8)}.${extension}`;
-  const fileRef = firebaseStorage.ref(storage, path);
-
-  await firebaseStorage.uploadBytes(fileRef, blob, { contentType });
-  return firebaseStorage.getDownloadURL(fileRef);
-}
-
-/**
- * Upload a profile picture to Firebase Storage and return a permanent
- * https:// download URL.
- *
- * WHY THIS EXISTS: profile pictures picked on-device used to be stored (and
- * shared with the backend) as file:///... paths from the image picker's cache
- * — paths that exist on no other device and break for the author too once
- * Android clears the cache. Uploading gives every device a stable URL; the
- * avatarCache module additionally mirrors it on disk so it renders offline.
- *
- * @param {string} uri - local file URI from expo-image-picker (file://…).
- *   Already-remote http(s) URLs are returned unchanged (nothing to upload).
- * @returns {Promise<string>} permanent https:// URL for the picture
- * @throws {Error} when Storage isn't set up or the upload fails (network /
- *   rules). Callers should fall back to keeping the local file.
- */
-export async function uploadProfileImage(uri) {
-  if (!uri) throw new Error('No image URI provided');
-  if (!/^file:/i.test(uri) && !uri.startsWith('/')) {
-    // Already a remote URL (Google avatar or a previously uploaded picture).
-    return uri;
-  }
-
-  // Local file -> Blob (React Native's fetch supports file:// URIs).
-  const blob = await (await fetch(uri)).blob();
-  
-  // Lazy load Firebase Storage modules
-  const firebaseStorage = await getFirebaseStorageModules();
-  const { getFirebaseApp } = await import('./aiLogic.js');
-  const app = await getFirebaseApp();
-  
-  const storage = firebaseStorage.getStorage(app);
-  const path =
-    `community/avatars/${Date.now()}-` +
-    `${Math.random().toString(36).slice(2, 8)}.jpg`;
-  const fileRef = firebaseStorage.ref(storage, path);
-
-  await firebaseStorage.uploadBytes(fileRef, blob, { contentType: 'image/jpeg' });
-  return firebaseStorage.getDownloadURL(fileRef);
+  // RN Blob has no.arrayBuffer() in some versions; use a FileReader instead.
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Read failed'));
+    reader.readAsDataURL(blob);
+  });
 }

@@ -23,6 +23,7 @@ let db = null;
 async function initStorage() {
   if (String(process.env.USE_FIRESTORE).toLowerCase() === 'false') {
     console.log('[storage] USE_FIRESTORE=false -> using in-memory store');
+    loadMemFromDisk();
     return mode;
   }
 
@@ -107,12 +108,72 @@ async function initStorage() {
     }
     mode = 'memory';
     console.warn(`[storage] ⚠️  Firestore unavailable (${error.message}).${hint}`);
-    console.warn('[storage] Falling back to in-memory store (data will NOT persist)');
+    console.warn('[storage] Falling back to in-memory store (persisted to disk)');
+    loadMemFromDisk();
   }
   return mode;
 }
 
 /* ------------------------- Memory implementation ------------------------- */
+// Persists all in-memory state to a JSON file so data survives server restarts
+// when Firestore is unavailable. Uses `data.mem` in this module's directory.
+const MEM_FILE = path.join(__dirname, 'data.mem.json');
+
+function loadMemFromDisk() {
+  try {
+    if (fs.existsSync(MEM_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MEM_FILE, 'utf8'));
+      const m = (k) => new Map(data[k] || []);
+      for (const [k, v] of Object.entries(data)) {
+        if (k === 'reports') { memReports.length = 0; memReports.push(...(v || [])); }
+        else if (k === 'nextPostId') memNextPostId = Number(v) || 1;
+        else if (k === 'nextContribId') memNextContribId = Number(v) || 1;
+        else if (k === 'community') {
+          const cm = new Map();
+          for (const [pk, pv] of Object.entries(v || {})) {
+            cm.set(pk, { ...pv, comments: new Map(Object.entries(pv.comments || {})) });
+          }
+          memCommunity.clear(); for (const [pk, pv] of cm) memCommunity.set(pk, pv);
+        }
+        else {
+          const target =
+            k === 'devices' ? memDevices :
+            k === 'posts' ? memPosts :
+            k === 'contribs' ? memContribs :
+            k === 'users' ? memUsers : null;
+          if (target) { target.clear(); for (const [kk, vv] of Object.entries(v || {})) target.set(kk, vv); }
+        }
+      }
+      console.log('[storage] Loaded in-memory data from disk');
+    }
+  } catch (error) {
+    console.warn('[storage] Could not load memory state:', error.message);
+  }
+}
+
+function saveMemToDisk() {
+  try {
+    const data = {
+      devices: Object.fromEntries(memDevices),
+      posts: Object.fromEntries(memPosts),
+      contribs: Object.fromEntries(memContribs),
+      community: Object.fromEntries(
+        [...memCommunity.entries()].map(([pk, pv]) => [pk, {
+          ...pv,
+          comments: Object.fromEntries(pv.comments || new Map()),
+        }])
+      ),
+      reports: [...memReports],
+      users: Object.fromEntries(memUsers),
+      nextPostId: memNextPostId,
+      nextContribId: memNextContribId,
+    };
+    fs.writeFileSync(MEM_FILE, JSON.stringify(data));
+  } catch (error) {
+    console.warn('[storage] Could not save memory state:', error.message);
+  }
+}
+
 const memDevices = new Map();   // userId -> { expoPushToken, name }
 const memPosts = new Map();     // postId -> { ownerUserId }
 const memContribs = new Map();  // "postId:contribId" -> { userId, likes }
@@ -129,9 +190,11 @@ const memImpl = {
   },
   async setDevice(userId, data) {
     memDevices.set(String(userId), { ...data });
+    saveMemToDisk();
   },
   async removeDevice(userId) {
     memDevices.delete(String(userId));
+    saveMemToDisk();
   },
   async getAllDevices() {
     return [...memDevices.entries()].map(([userId, d]) => ({ userId, ...d }));
@@ -148,6 +211,7 @@ const memImpl = {
       likedBy: [],
       createdAt: new Date().toISOString(),
     });
+    saveMemToDisk();
     return postId;
   },
   async getQAPost(postId) {
@@ -165,6 +229,7 @@ const memImpl = {
       likedBy: [],
       createdAt: new Date().toISOString(),
     });
+    saveMemToDisk();
     return contributionId;
   },
   async likeQAContribution(postId, contributionId, userId) {
@@ -179,6 +244,7 @@ const memImpl = {
       c.likedBy = likedBy;
     }
     c.likes = likedBy.length;
+    saveMemToDisk();
     return { likes: c.likes, likedByMe: !wasLiked, userId: c.userId };
   },
   async likeQAQuestion(postId, userId) {
@@ -193,6 +259,7 @@ const memImpl = {
       p.likedBy = likedBy;
     }
     p.likes = likedBy.length;
+    saveMemToDisk();
     return { likes: p.likes, likedByMe: !wasLiked, ownerUserId: p.ownerUserId };
   },
   async getQAParticipantUserIds(postId) {
@@ -235,6 +302,7 @@ const memImpl = {
       likedBy: [],
       comments: new Map(),
     });
+    saveMemToDisk();
   },
   async getCommunityPost(postId) {
     const p = memCommunity.get(String(postId));
@@ -251,6 +319,7 @@ const memImpl = {
       likedBy: [],
       createdAt: new Date().toISOString(),
     });
+    saveMemToDisk();
   },
   async getCommunityComment(postId, commentId) {
     const p = memCommunity.get(String(postId));
@@ -287,6 +356,7 @@ const memImpl = {
       p.likedBy = likedBy;
     }
     p.likes = likedBy.length;
+    saveMemToDisk();
     return { likes: p.likes, likedByMe: !wasLiked, ownerUserId: p.ownerUserId };
   },
   async likeCommunityComment(postId, commentId, userId) {
@@ -303,6 +373,7 @@ const memImpl = {
       c.likedBy = likedBy;
     }
     c.likes = likedBy.length;
+    saveMemToDisk();
     return { likes: c.likes, likedByMe: !wasLiked, userId: c.userId };
   },
   async getCommunityParticipantUserIds(postId) {
@@ -328,6 +399,7 @@ const memImpl = {
     for (const k of [...memContribs.keys()]) {
       if (k.startsWith(`${key}:`)) memContribs.delete(k);
     }
+    saveMemToDisk();
     return true;
   },
   async deleteQAContribution(postId, contributionId, userId) {
@@ -337,6 +409,7 @@ const memImpl = {
     // Only the contribution's author (or the AI pseudo-user) may delete it.
     if (userId && c.userId && c.userId !== userId && c.userId !== 'ai@islamiogreniyorum.app') return false;
     memContribs.delete(key);
+    saveMemToDisk();
     return true;
   },
   async deleteCommunityPost(postId, ownerUserId) {
@@ -346,6 +419,7 @@ const memImpl = {
     // Only the owner may delete the post.
     if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
     memCommunity.delete(key);
+    saveMemToDisk();
     return true;
   },
   async deleteCommunityComment(postId, commentId, userId) {
@@ -356,6 +430,47 @@ const memImpl = {
     // Only the comment's author may delete it.
     if (userId && c.userId && c.userId !== userId) return false;
     p.comments.delete(String(commentId));
+    saveMemToDisk();
+    return true;
+  },
+  async updateQAPost(postId, ownerUserId, data = {}) {
+    const key = String(postId);
+    const p = memPosts.get(key);
+    if (!p) return false;
+    // Only the owner may update the question.
+    if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
+    if (data.question !== undefined) p.question = data.question;
+    saveMemToDisk();
+    return true;
+  },
+  async updateQAContribution(postId, contributionId, userId, text) {
+    const key = `${String(postId)}:${String(contributionId)}`;
+    const c = memContribs.get(key);
+    if (!c) return false;
+    // Only the contribution's author (or the AI pseudo-user) may update it.
+    if (userId && c.userId && c.userId !== userId && c.userId !== 'ai@islamiogreniyorum.app') return false;
+    if (text !== undefined) c.text = text;
+    saveMemToDisk();
+    return true;
+  },
+  async updateCommunityPost(postId, ownerUserId, text) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return false;
+    // Only the owner may update the post.
+    if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
+    if (text !== undefined) p.text = text;
+    saveMemToDisk();
+    return true;
+  },
+  async updateCommunityComment(postId, commentId, userId, text) {
+    const p = memCommunity.get(String(postId));
+    if (!p) return false;
+    const c = p.comments.get(String(commentId));
+    if (!c) return false;
+    // Only the comment's author may update it.
+    if (userId && c.userId && c.userId !== userId) return false;
+    if (text !== undefined) c.text = text;
+    saveMemToDisk();
     return true;
   },
 
@@ -365,6 +480,7 @@ const memImpl = {
 
   async addReport(report) {
     memReports.push({ ...report, createdAt: new Date().toISOString() });
+    saveMemToDisk();
     return true;
   },
 
@@ -374,10 +490,12 @@ const memImpl = {
   },
   async setUser(user) {
     memUsers.set(String(user.id), { ...user });
+    saveMemToDisk();
     return { ...user };
   },
   async deleteUser(id) {
     memUsers.delete(String(id));
+    saveMemToDisk();
   },
 };
 
@@ -662,6 +780,62 @@ const fsImpl = {
     await ref.delete();
     return true;
   },
+  async updateQAPost(postId, ownerUserId, data = {}) {
+    const ref = db.collection('qaPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the owner may update the question.
+    if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
+    const patch = {};
+    if (data.question !== undefined) patch.question = data.question;
+    if (Object.keys(patch).length > 0) {
+      await ref.update({ ...patch, updatedAt: new Date().toISOString() });
+    }
+    return true;
+  },
+  async updateQAContribution(postId, contributionId, userId, text) {
+    const ref = db
+      .collection('qaPosts')
+      .doc(String(postId))
+      .collection('contributions')
+      .doc(String(contributionId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the contribution's author (or the AI pseudo-user) may update it.
+    if (userId && snap.data().userId && snap.data().userId !== userId && snap.data().userId !== 'ai@islamiogreniyorum.app') {
+      return false;
+    }
+    if (text !== undefined) {
+      await ref.update({ text, updatedAt: new Date().toISOString() });
+    }
+    return true;
+  },
+  async updateCommunityPost(postId, ownerUserId, text) {
+    const ref = db.collection('communityPosts').doc(String(postId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the owner may update the post.
+    if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
+    if (text !== undefined) {
+      await ref.update({ text, updatedAt: new Date().toISOString() });
+    }
+    return true;
+  },
+  async updateCommunityComment(postId, commentId, userId, text) {
+    const ref = db
+      .collection('communityPosts')
+      .doc(String(postId))
+      .collection('comments')
+      .doc(String(commentId));
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    // Only the comment's author may update it.
+    if (userId && snap.data().userId && snap.data().userId !== userId) return false;
+    if (text !== undefined) {
+      await ref.update({ text, updatedAt: new Date().toISOString() });
+    }
+    return true;
+  },
 
   async counts() {
     const [d, p, cp] = await Promise.all([
@@ -723,6 +897,8 @@ module.exports = {
   getQAParticipantUserIds: (...args) => impl().getQAParticipantUserIds(...args),
   deleteQAPost: (...args) => impl().deleteQAPost(...args),
   deleteQAContribution: (...args) => impl().deleteQAContribution(...args),
+  updateQAPost: (...args) => impl().updateQAPost(...args),
+  updateQAContribution: (...args) => impl().updateQAContribution(...args),
   registerCommunityPost: (...args) => impl().registerCommunityPost(...args),
   getCommunityPost: (...args) => impl().getCommunityPost(...args),
     setCommunityComment: (...args) => impl().setCommunityComment(...args),
@@ -732,6 +908,8 @@ module.exports = {
   getCommunityParticipantUserIds: (...args) => impl().getCommunityParticipantUserIds(...args),
   deleteCommunityPost: (...args) => impl().deleteCommunityPost(...args),
   deleteCommunityComment: (...args) => impl().deleteCommunityComment(...args),
+  updateCommunityPost: (...args) => impl().updateCommunityPost(...args),
+  updateCommunityComment: (...args) => impl().updateCommunityComment(...args),
   listQAPosts: (...args) => impl().listQAPosts(...args),
   listCommunityPosts: (...args) => impl().listCommunityPosts(...args),
   addReport: (...args) => impl().addReport(...args),

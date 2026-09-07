@@ -88,10 +88,19 @@
         }
       ]
     ],
-    "extra": {
+        "extra": {
       "eas": {
         "projectId": "aafa9d62-b062-475a-9f27-4d88e0b8c6cc"
-      }
+      },
+      "firebaseWebConfig": {
+        "apiKey": "AIzaSyDwIT4O1c_24SzLx42CuI36mjYhX24YFcY",
+        "authDomain": "islami-ogreniyorum.firebaseapp.com",
+        "projectId": "islami-ogreniyorum",
+        "storageBucket": "islami-ogreniyorum.firebasestorage.app",
+        "messagingSenderId": "817195380589",
+        "appId": "1:817195380589:android:aa2049bbae8fb9f7c9b464"
+      },
+      "requestSigningKey": "islami-ogreniyorum-secure-signing-key-2024"
     },
     "owner": "joshua93"
   }

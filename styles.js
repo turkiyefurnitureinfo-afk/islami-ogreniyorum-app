@@ -174,7 +174,9 @@ export function makeStyles(palette) {
     // ---------- Shared content ----------
     contentPadding: {
       paddingTop: 16,
-      paddingBottom: 32,
+      // Extra bottom space so the last button/row isn't hidden behind the
+      // Android gesture/navigation bar (edge-to-edge) on small screens.
+      paddingBottom: 72,
     },
     card: {
       backgroundColor: palette.card,
@@ -905,6 +907,25 @@ export function makeStyles(palette) {
       borderRadius: 8,
       overflow: 'hidden',
     },
+    aiSourcesWrap: {
+      marginTop: 6,
+      gap: 4,
+    },
+    aiSourceItem: {
+      backgroundColor: palette.panel,
+      borderWidth: 1,
+      borderColor: palette.soft,
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+    },
+    aiSourceTitle: {
+      color: palette.primary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
     // Community new styles
     communityCreateCard: {
       backgroundColor: palette.card,
@@ -1224,8 +1245,18 @@ export function makeStyles(palette) {
       justifyContent: 'center',
       padding: 20,
     },
-    modalScroll: {
+    modalScrollView: {
+      // The ScrollView itself must have a bounded height to enable scrolling.
+      // maxHeight of 85% ensures the modal doesn't cover the entire screen
+      // and allows scrolling when content exceeds this height.
       maxHeight: '85%',
+      width: '100%',
+    },
+    modalScroll: {
+      // Content container style - ensures proper padding. Do NOT center content
+      // vertically: on small screens a centered tall card gets clipped at the
+      // top and bottom, making the scroll buttons unreachable.
+      flexGrow: 1,
     },
     modalCard: {
       backgroundColor: palette.card,

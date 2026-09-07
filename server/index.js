@@ -10,7 +10,16 @@ const { getPrayerTimes } = require('./prayer-times');
 const { requireVerifiedUser } = require('./verify');
 
 const app = express();
-app.use(cors());
+
+// CORS configuration - restrict to specific origins in production
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
 // Cap request bodies — the largest legit payload is a community post/comment.
 // Prevents oversized-body abuse on the free-tier deployment.
 app.use(express.json({ limit: '32kb' }));
@@ -40,7 +49,7 @@ for (const method of ['get', 'post', 'put', 'delete', 'patch']) {
     original(
       path,
       ...handlers.map((h) =>
-        typeof h === 'function' && h.length <= 3 ? crashProof(h) : h
+        typeof h === 'function' && h.length === 3 ? crashProof(h) : h
       )
     );
 }
@@ -68,12 +77,16 @@ process.on('unhandledRejection', (reason) => {
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 120;
 const rateBuckets = new Map(); // ip -> { count, resetAt }
-setInterval(() => {
+const rateLimiterInterval = setInterval(() => {
   const now = Date.now();
   for (const [ip, bucket] of rateBuckets) {
     if (bucket.resetAt <= now) rateBuckets.delete(ip);
   }
-}, RATE_LIMIT_WINDOW_MS).unref();
+}, RATE_LIMIT_WINDOW_MS);
+
+// Clean up interval on server shutdown
+process.on('SIGTERM', () => clearInterval(rateLimiterInterval));
+process.on('SIGINT', () => clearInterval(rateLimiterInterval));
 
 function rateLimit(req, res, next) {
   // Render terminates TLS and proxies: x-forwarded-for holds the real client IP.
@@ -263,6 +276,150 @@ async function dispatchNotification({ trigger, triggerUserId, entityId, title, b
 
 // ---------- Routes ----------
 
+// ---------- Media upload ----------
+// The native app uploads community photos/videos and profile pictures here so
+// every device gets a permanent public URL. (On-device Firebase Web-SDK
+// Storage uploads don't work in React Native, which is why others couldn't see
+// media.) Bodies are accepted as base64 JSON — keeps the client simple and
+// avoids adding multer. Public files are served from /uploads/*.
+const UPLOADS_DIR =
+  process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads');
+const crypto = require('crypto');
+const fs = require('fs');
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB, mirrors app limit
+const MAX_UPLOAD_BASE64 = Math.ceil(MAX_UPLOAD_BYTES * 1.34) + 1024;
+
+// Ensure the uploads dir exists (both locally and on Render's ephemeral disk).
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// A separate body parser for the upload route: it needs a much larger limit
+// than the default 32kb used everywhere else.
+const uploadJson = express.json({ limit: '60mb' });
+
+// Firebase Storage backend for uploads (survives host redeploys; the local
+// disk does not — e.g. Render wipes it on every deploy). storage-uploads.js
+// reuses the same service-account credentials as the Firestore layer and
+// returns null when Storage is unusable, in which case we fall back to the
+// original disk write below. Nothing else in the API contract changes:
+// the client still POSTs {data, ext} and receives {success, url}.
+const storageUploads = require('./storage-uploads');
+
+/** MIME type for an uploaded file extension (small, safe allowlist). */
+function mimeForExt(ext) {
+  const map = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    m4v: 'video/x-m4v',
+    mp3: 'audio/mpeg',
+    m4a: 'audio/mp4',
+    wav: 'audio/wav',
+    pdf: 'application/pdf',
+  };
+  return map[ext.toLowerCase()] || 'application/octet-stream';
+}
+
+app.post('/api/upload', uploadJson, async (req, res) => {
+  const { data, ext } = req.body;
+  // data: base64 of the raw file; ext: 'jpg' | 'mp4' | 'png' | ...
+  if (!data || typeof data !== 'string') {
+    return res.status(400).json({ error: 'data (base64) is required' });
+  }
+  if (typeof data !== 'string' || data.length > MAX_UPLOAD_BASE64) {
+    return res.status(413).json({ error: 'Upload too large (max 50 MB)' });
+  }
+  const safeExt =
+    /^[A-Za-z0-9]{1,6}$/.test(String(ext)) ? String(ext) : 'bin';
+
+  try {
+    // The client sends a full data URI ("data:image/jpeg;base64,....") from
+    // FileReader.readAsDataURL. Decoding the WHOLE string as base64 would
+    // silently decode the prefix's alphabet characters too, prepending ~14
+    // bytes of garbage and corrupting every stored file (broken images).
+    // Strip a leading data-URI prefix when present; raw base64 also works.
+    const match = /^data:[^,]*,/i.exec(data);
+    const b64 = match ? data.slice(match[0].length) : data;
+
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length < 1) throw new Error('Empty data');
+    if (buf.length > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({ error: 'Upload too large (max 50 MB)' });
+    }
+    const name = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${safeExt}`;
+
+    // Preferred path: persistent Firebase Storage object (kept private; reads
+    // are served via /uploads/:name -> short-lived signed URL, so the URL the
+    // client stores is IDENTICAL to the disk-path URL below).
+    let storedViaStorage = false;
+    try {
+      const uploaded = await storageUploads.uploadBuffer(
+        buf,
+        name,
+        mimeForExt(safeExt)
+      );
+      if (uploaded && uploaded.bucket) {
+        storedViaStorage = true;
+        console.log(`[upload] saved ${name} (${buf.length} bytes) -> Storage bucket ${uploaded.bucket}`);
+      }
+    } catch (storageError) {
+      console.error('[upload] Storage write failed, falling back to disk:',
+        (storageError && storageError.message) || storageError);
+    }
+
+    if (!storedViaStorage) {
+      // Legacy path: local disk (ephemeral on some hosts, but keeps the
+      // endpoint fully functional when Firebase Storage is not configured).
+      fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
+      console.log(`[upload] saved ${name} (${buf.length} bytes) -> disk`);
+    }
+
+    // Same URL shape either way — the client contract is unchanged.
+    const url = `/uploads/${name}`;
+    res.json({ success: true, url, absoluteUrl: `${req.protocol}://${req.get('host')}${url}` });
+  } catch (error) {
+    console.error('[upload] failed:', error && error.message);
+    res.status(400).json({ error: 'Upload failed' });
+  }
+});
+
+// Serve uploaded media publicly so the whole community can view it.
+app.use(
+  '/uploads',
+  express.static(UPLOADS_DIR, {
+    maxAge: '7d',
+    setHeaders: (res) => res.set('X-Content-Type-Options', 'nosniff'),
+  })
+);
+
+// Signed-URL gateway for media stored in Firebase Storage (the disk fallback
+// above only serves files that exist locally). For a private Storage object
+// the static middleware falls through to here; we redirect to a short-lived
+// V4 signed read URL (max 7 days per V4 rules) so the stored /uploads/<name>
+// URL keeps working for every user without public-read IAM on the bucket.
+app.get('/uploads/:name', async (req, res) => {
+  const name = String(req.params.name || '');
+  if (!/^[A-Za-z0-9._-]{1,200}$/.test(name) || name.includes('..')) {
+    return res.status(400).json({ error: 'Bad name' });
+  }
+  try {
+    const signed = await storageUploads.getSignedUrl(name);
+    if (signed) return res.redirect(302, signed);
+    // No Storage on this host: the file must be on disk (static handled it)
+    // or it genuinely doesn't exist.
+    return res.status(404).json({ error: 'Not found' });
+  } catch (error) {
+    console.error('[uploads] signed-url error:', error && error.message);
+    return res.status(404).json({ error: 'Not found' });
+  }
+});
+
 // Register a device token for a user
 app.post('/api/register', requireVerifiedUser, async (req, res) => {
   const userId = req.verifiedUserId;
@@ -425,6 +582,38 @@ app.delete('/api/posts/:postId/contributions/:contribId', requireVerifiedUser, a
     return res.status(404).json({ error: 'Contribution not found or not yours to delete' });
   }
   console.log(`Q&A contribution ${contribId} deleted by ${userId}`);
+  res.json({ success: true });
+});
+
+// Update a Q&A question (owner only)
+app.put('/api/posts/:postId', requireVerifiedUser, async (req, res) => {
+  const { postId } = req.params;
+  const userId = req.verifiedUserId;
+  const { question } = req.body;
+  if (!userId || !question) {
+    return res.status(400).json({ error: 'userId and question are required' });
+  }
+  const ok = await storage.updateQAPost(postId, userId, { question });
+  if (!ok) {
+    return res.status(404).json({ error: 'Post not found or not yours to update' });
+  }
+  console.log(`Q&A post ${postId} updated by ${userId}`);
+  res.json({ success: true });
+});
+
+// Update a Q&A answer/contribution (author only)
+app.put('/api/posts/:postId/contributions/:contribId', requireVerifiedUser, async (req, res) => {
+  const { postId, contribId } = req.params;
+  const userId = req.verifiedUserId;
+  const { text } = req.body;
+  if (!userId || !text) {
+    return res.status(400).json({ error: 'userId and text are required' });
+  }
+  const ok = await storage.updateQAContribution(postId, contribId, userId, text);
+  if (!ok) {
+    return res.status(404).json({ error: 'Contribution not found or not yours to update' });
+  }
+  console.log(`Q&A contribution ${contribId} updated by ${userId}`);
   res.json({ success: true });
 });
 
@@ -719,6 +908,38 @@ app.delete('/api/community/posts/:postId/comments/:commentId', requireVerifiedUs
   res.json({ success: true });
 });
 
+// Update a community post (owner only)
+app.put('/api/community/posts/:postId', requireVerifiedUser, async (req, res) => {
+  const { postId } = req.params;
+  const userId = req.verifiedUserId;
+  const { text } = req.body;
+  if (!userId || !text) {
+    return res.status(400).json({ error: 'userId and text are required' });
+  }
+  const ok = await storage.updateCommunityPost(postId, userId, text);
+  if (!ok) {
+    return res.status(404).json({ error: 'Post not found or not yours to update' });
+  }
+  console.log(`Community post ${postId} updated by ${userId}`);
+  res.json({ success: true });
+});
+
+// Update a community comment (author only)
+app.put('/api/community/posts/:postId/comments/:commentId', requireVerifiedUser, async (req, res) => {
+  const { postId, commentId } = req.params;
+  const userId = req.verifiedUserId;
+  const { text } = req.body;
+  if (!userId || !text) {
+    return res.status(400).json({ error: 'userId and text are required' });
+  }
+  const ok = await storage.updateCommunityComment(postId, commentId, userId, text);
+  if (!ok) {
+    return res.status(404).json({ error: 'Comment not found or not yours to update' });
+  }
+  console.log(`Community comment ${commentId} updated by ${userId}`);
+  res.json({ success: true });
+});
+
 // Broadcast an upcoming event notification to all users
 // ---------- Shared feeds ----------
 // Devices pull these to see everyone's questions/posts (the write paths above
@@ -813,10 +1034,101 @@ app.post('/api/ai/answer', async (req, res) => {
       return res.status(504).json({ success: false, error: 'AI answer timed out' });
     }
 
-    res.json({ success: true, answer: result.answer, provider: result.provider });
+    // `sources` is present when the answer came from the web-search fallback
+    // (Google Programmable Search / DuckDuckGo / Wikipedia) so the app can
+    // render the referenced links under the answer.
+    res.json({
+      success: true,
+      answer: result.answer,
+      provider: result.provider,
+      ...(result.model ? { model: result.model } : {}),
+      ...(Array.isArray(result.sources) && result.sources.length > 0
+        ? { sources: result.sources }
+        : {}),
+    });
   } catch (error) {
     console.error('AI answer error:', error.message);
     res.status(500).json({ error: 'Failed to generate answer' });
+  }
+});
+
+// ---------- Account Deletion ----------
+// DELETE /api/users/:email - Permanently delete a user account and all associated data
+// Requires verified Firebase ID token
+app.delete('/api/users/:email', requireVerifiedUser, async (req, res) => {
+  const { email } = req.params;
+  const userId = req.verifiedUserId;
+  
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  
+  try {
+    // Verify the user is deleting their own account
+    const userData = await storage.getUser(userId);
+    if (!userData || userData.email !== email.toLowerCase()) {
+      return res.status(403).json({ error: 'You can only delete your own account' });
+    }
+    
+    // Delete all user's Q&A posts
+    const qaPosts = await storage.listQAPosts(1000);
+    for (const post of qaPosts) {
+      if (post.ownerUserId === userId) {
+        await storage.deleteQAPost(post.id, userId);
+      }
+    }
+    
+    // Delete all user's community posts and comments
+    const communityPosts = await storage.listCommunityPosts(1000);
+    for (const post of communityPosts) {
+      if (post.ownerUserId === userId) {
+        await storage.deleteCommunityPost(post.id, userId);
+      }
+    }
+    
+    // Remove device registrations
+    await storage.removeDevice(userId);
+    
+    // Delete user account
+    await storage.deleteUser(userId);
+    
+    console.log(`Account deleted: ${email} (${userId})`);
+    res.json({ success: true, message: 'Account deleted successfully' });
+  } catch (error) {
+    console.error('Account deletion error:', error.message);
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
+// AI: Web-search answer (no Gemini required)
+// Returns sourced answers from Google Programmable Search / DuckDuckGo /
+// Wikipedia. Used as a fallback when Gemini is unavailable or times out.
+app.post('/api/ai/search', async (req, res) => {
+  const { question, language } = req.body;
+  if (
+    !question ||
+    typeof question !== 'string' ||
+    question.trim().length < 3
+  ) {
+    return res.status(400).json({ error: 'question is required' });
+  }
+  const safeQuestion = question.trim().slice(0, 1000);
+
+  try {
+    const { getSearchAnswer } = require('./search-answer');
+    const result = await getSearchAnswer(safeQuestion, language === 'en' ? 'en' : 'tr');
+    if (!result) {
+      return res.json({ success: false, error: 'No search results found' });
+    }
+    res.json({
+      success: true,
+      answer: result.answer,
+      provider: result.provider,
+      sources: result.sources,
+    });
+  } catch (error) {
+    console.error('Search answer error:', error.message);
+    res.status(500).json({ error: 'Failed to get search answer' });
   }
 });
 
@@ -902,6 +1214,12 @@ app.use((err, req, res, _next) => {
       error: err.status === 400 ? 'Bad request' : 'Internal server error',
     });
   }
+});
+
+// ---------- 404 handler ----------
+// Catch-all for undefined routes - must be after all other routes
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
 
 const PORT = process.env.PORT || 3000;

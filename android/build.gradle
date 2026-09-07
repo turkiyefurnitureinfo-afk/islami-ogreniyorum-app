@@ -1,15 +1,16 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
+    ext.kotlinVersion = '2.2.0'
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
         classpath 'com.google.gms:google-services:4.4.1'
-        classpath('com.android.tools.build:gradle:8.9.1')
+        classpath('com.android.tools.build:gradle:8.13.2')
         classpath('com.facebook.react:react-native-gradle-plugin')
-        classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
     }
 }
 
@@ -35,3 +36,24 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+// The expo-dev-menu module uses Compose libraries compiled with Kotlin 2.2.0
+// metadata (e.g. com.composables:core). The Kotlin Gradle plugin version is
+// set to 2.2.0 via ext.kotlinVersion above. We force kotlin-stdlib to 2.2.0 so
+// that all Kotlin modules compile against a single, compatible version and the
+// 2.2.0 metadata in transitive dependencies is readable.
+// Also force org.jetbrains:annotations to 23.0.0 to resolve conflicts between
+// kotlin-stdlib and kotlinx-coroutines declared versions.
+subprojects {
+    configurations.all {
+        resolutionStrategy {
+            force 'org.jetbrains:annotations:23.0.0'
+            force 'org.jetbrains.kotlin:kotlin-stdlib:2.2.0'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.0'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.0'
+            force 'org.jetbrains.kotlin:kotlin-reflect:2.2.0'
+            force 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+            force 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+        }
+    }
+}

@@ -3,7 +3,7 @@ import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { translateText, looksLikeTurkish } from './aiLogic.js';
 
 // ---------------------------------------------------------------------------
-// Community translation — reuse the same Gemini model used for AI answers.
+// Community translation — keyless, free (no Gemini dependency).
 // Turkish ↔ English so every user can read every post regardless of language.
 // ---------------------------------------------------------------------------
 
@@ -27,7 +27,7 @@ export function useTranslate(originalText) {
       return;
     }
     setLoading(true);
-    setError(null);
+    setError(null); // Clear any previous error before retrying
     try {
       const result = await translateText(originalText);
       setTranslation(result);

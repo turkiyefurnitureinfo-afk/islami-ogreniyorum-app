@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ScrollView, View, Text, Pressable, Switch, TextInput, Modal, Alert, Linking, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './config.js';
-import { clearAccount, clearAllData, saveProfile as persistProfile, loadProfile, saveAccount, saveProfileForEmail, loadProfileForEmail } from './storage.js';
-import { registerUserProfile, updateServerUser } from './notifications.js';
+import { clearAllData } from './storage.js';
+import { registerUserProfile, updateServerUser, fetchServerUser, cancelAllPrayerNotifications, deleteServerUser } from './notifications.js';
 import { cloudSaveProfile } from './cloudSync.js';
 import {
   isFirebaseConfigured,
@@ -13,9 +13,12 @@ import {
   firebaseReauthenticate,
   firebaseSignOut,
   friendlyFirebaseError,
+  firebaseDeleteAccount,
+  ensureFreshLogin,
 } from './firebaseAuth.js';
 import { uploadProfileImage } from './mediaService.js';
 import { useCachedAvatar } from './avatarCache.js';
+import { signOutGoogle } from './googleAuth.js';
 
 // Avatar for the Edit Profile modal: renders from the on-disk cache first so
 // the picture still shows offline; a neutral placeholder shows when the
@@ -25,8 +28,14 @@ function ModalAvatar({ url, fallback, style }) {
   const cached = useCachedAvatar(url);
   const src = cached || url;
   const [errored, setErrored] = useState(false);
+  // Reset the error flag whenever the resolved source changes (e.g. a fresh
+  // URL becomes available from the avatar cache) so a stale failure from a
+  // previous avatar never hides a newly-available picture. Done in an effect
+  // rather than during render to avoid the React "update during render" issue.
+  useEffect(() => {
+    setErrored(false);
+  }, [src]);
   if (src) {
-    if (errored) setErrored(false);
     return (
       <Image
         source={{ uri: src }}
@@ -48,7 +57,7 @@ function ModalAvatar({ url, fallback, style }) {
   );
 }
 
-const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, saveAccount, isGoogleUser, setSignedIn, profilePicture, setProfilePicture }) => {
+const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, isGoogleUser, setIsGoogleUser, setSignedIn, profilePicture, setProfilePicture, setOccupation, setAddress, setBio }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
 
@@ -82,17 +91,25 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     setDraftEmail(account.email || '');
     setErrorMsg('');
     setProfileModalOpen(true);
-    // Pre-fill the signup fields (occupation/address/bio) from the PER-EMAIL
-    // profile record so Edit Profile shows exactly what was saved at signup.
+    // Pre-fill the signup fields (occupation/address/bio) from the CLOUD
+    // profile so Edit Profile shows the latest saved data.
     const emailKey = account.email || '';
     if (emailKey) {
       try {
-        const prof = (await loadProfileForEmail(emailKey)) || {};
-        setDraftOccupation(prof.occupation || '');
-        setDraftAddress(prof.address || '');
-        setDraftBio(prof.bio || '');
-        if (prof.fullName && !account.fullName) setDraftName(prof.fullName);
+        // Fetch profile from cloud server
+        const serverUser = await fetchServerUser(emailKey);
+        if (serverUser) {
+          setDraftOccupation(serverUser.occupation || '');
+          setDraftAddress(serverUser.address || '');
+          setDraftBio(serverUser.bio || '');
+          if (serverUser.fullName && !account.fullName) setDraftName(serverUser.fullName);
+        } else {
+          setDraftOccupation('');
+          setDraftAddress('');
+          setDraftBio('');
+        }
       } catch {
+        // Offline - leave fields empty
         setDraftOccupation('');
         setDraftAddress('');
         setDraftBio('');
@@ -158,10 +175,8 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     await changeProfilePicture('');
   };
 
-  // Persist the chosen picture: local state + AsyncStorage + the backend
-  // (so the avatar survives reinstalls, mirroring the profile-save flow).
-  // NOTE: persistProfile is storage.js's saveProfile — the component's own
-  // saveProfile() function below would otherwise shadow the import.
+  // Persist the chosen picture: local state + cloud server
+  // (so the avatar survives reinstalls).
   const changeProfilePicture = async (uri) => {
     // Mirror a device-local picture to Firebase Storage first (best-effort) so
     // the stored value is a permanent https:// URL that renders on every
@@ -177,14 +192,10 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       }
     }
     setProfilePicture(finalUri);
-    try {
-      const savedProfile = (await loadProfile()) || {};
-      await persistProfile({ ...savedProfile, profilePicture: finalUri });
-    } catch {}
-    // Also update the account with the profile picture so it persists across sessions
+    // Update account state only (no local storage)
     const updatedAccount = { ...account, profilePicture: finalUri || '' };
     setAccount(updatedAccount);
-    saveAccount(updatedAccount);
+    // Save to cloud server
     updateServerUser(account.email, { profilePicture: finalUri || '' }).catch(() => {});
     Alert.alert(getTranslation('profileUpdated', 'Your profile has been updated successfully.'));
   };
@@ -194,41 +205,18 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       setErrorMsg(getTranslation('enterYourName', 'Please enter a valid name.'));
       return;
     }
-    const email = draftEmail.trim();
-    if (!email || !email.includes('@')) {
+        const email = draftEmail.trim();
+    // Use a regex for proper email validation instead of just checking for '@'
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
       setErrorMsg(getTranslation('enterYourEmail', 'Please enter a valid email address.'));
       return;
     }
     const updated = { ...account, fullName: draftName.trim(), email, profilePicture: profilePicture || account.profilePicture };
     setAccount(updated);
-    saveAccount(updated);
+    // No local storage save - only cloud
 
-    // Persist the FULL signup profile PER EMAIL (occupation/address/bio
-    // included) so Edit Profile pre-fills next time and the data survives
-    // reinstalls. Keyed by the account's email, exactly as at signup.
-    try {
-      const emailKey = account.email || email;
-      const existing = (await loadProfileForEmail(emailKey)) || {};
-      await saveProfileForEmail(emailKey, {
-        ...existing,
-        fullName: updated.fullName,
-        email,
-        profilePicture: updated.profilePicture || '',
-        occupation: draftOccupation.trim(),
-        address: draftAddress.trim(),
-        bio: draftBio.trim(),
-      });
-    } catch {}
-
-    // Also save the full profile data (occupation, address, bio, profilePicture) to profile storage
-    try {
-      const savedProfile = (await loadProfile()) || {};
-      await persistProfile({
-        ...savedProfile,
-        profilePicture: profilePicture || savedProfile.profilePicture,
-      });
-    } catch {}
-
+    // Profile data is saved to cloud only
     setProfileModalOpen(false);
     Alert.alert(getTranslation('profileUpdated', 'Your profile has been updated successfully.'));
 
@@ -236,7 +224,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     if (isFirebaseConfigured()) {
       firebaseUpdateProfile(updated.fullName, updated.profilePicture || undefined).catch(() => {});
     }
-    // Best-effort sync to the backend so the change survives reinstalls.
+    // Save to cloud server so the change survives reinstalls.
     updateServerUser(account.email || email, {
       fullName: updated.fullName,
       email,
@@ -256,9 +244,11 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     } catch (_e) { /* best-effort */ }
   };
 
-  const saveEmail = () => {
+    const saveEmail = () => {
     const email = draftEmail.trim();
-    if (!email || !email.includes('@')) {
+    // Use a regex for proper email validation instead of just checking for '@'
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
       setErrorMsg(getTranslation('enterYourEmail', 'Please enter a valid email address.'));
       return;
     }
@@ -268,7 +258,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
         .then(() => {
           const updated = { ...account, email };
           setAccount(updated);
-          saveAccount(updated);
+          // No local storage save - only cloud
           setEmailModalOpen(false);
           Alert.alert(getTranslation('emailUpdated', 'Your email address has been updated successfully.'));
           // Move the server record to the new email (best-effort).
@@ -280,7 +270,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     } else {
       const updated = { ...account, email };
       setAccount(updated);
-      saveAccount(updated);
+      // No local storage save - only cloud
       setEmailModalOpen(false);
       Alert.alert(getTranslation('emailUpdated', 'Your email address has been updated successfully.'));
       updateServerUser(account.email, { email, fullName: updated.fullName }).catch(() => {});
@@ -313,7 +303,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
         await firebaseUpdatePassword(draftNewPassword);
         const updated = { ...account, password: '' };
         setAccount(updated);
-        saveAccount(updated);
+        // No local storage save - only cloud
         setPasswordModalOpen(false);
         Alert.alert(getTranslation('passwordChanged', 'Your password has been updated successfully.'));
       } catch (error) {
@@ -329,20 +319,233 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
   };
 
   const handleLogout = () => {
-    // Sign out of Firebase too (no-op when Firebase isn't configured), then
-    // clear the locally cached account so the next launch shows the auth
-    // screen instead of restoring the signed-in state.
+    // Cancel all pending prayer notifications on sign-out so they don't
+    // keep ringing for a user who is no longer signed in.
+    cancelAllPrayerNotifications().catch(() => {});
+    // Sign out of Firebase too (no-op when Firebase isn't configured).
+    // Account data is stored in the cloud, so no need to clear local storage.
     if (isFirebaseConfigured()) {
       firebaseSignOut().catch(() => {});
     }
-    clearAccount();
+    // Also revoke the native Google Sign-In session so the account chooser
+    // appears again on the next "Sign in with Google" (otherwise the module
+    // silently re-uses the previous Google account).
+    signOutGoogle().catch(() => {});
+    // Clear account state (but not from AsyncStorage since we don't store it there)
+    setAccount({ fullName: '', email: '', password: '' });
+    setProfilePicture('');
     setSignedIn(false);
+    setIsGoogleUser(false);
+    setOccupation('');
+    setAddress('');
+    setBio('');
+  };
+
+  // ---- Password re-auth modal state ----------------------------------------
+  // Deleting an account is a sensitive Firebase operation that requires a
+  // recent login. When the stored session is stale (and for users created
+  // before passwords were kept client-side), we surface this modal to collect
+  // the password, then re-authenticate before calling user.delete().
+  const [reauthModalOpen, setReauthModalOpen] = useState(false);
+  const [reauthPassword, setReauthPassword] = useState('');
+  const [reauthModalTitle, setReauthModalTitle] = useState({
+    title: '',
+    message: '',
+  });
+  const reauthResolverRef = React.useRef(null);
+
+  /**
+   * Ask the user for their password via a real modal (Alert.prompt is not
+   * available on Android). Resolves the entered password string, or null when
+   * the user cancels.
+   */
+  const promptForPassword = (title, message) =>
+    new Promise((resolve) => {
+      reauthResolverRef.current = resolve;
+      setReauthPassword('');
+      setReauthModalTitle({ title, message });
+      setReauthModalOpen(true);
+    });
+
+  const resolveReauth = (value) => {
+    setReauthModalOpen(false);
+    const resolver = reauthResolverRef.current;
+    reauthResolverRef.current = null;
+    if (resolver) resolver(value);
   };
 
   const handleDeleteAccount = () => {
-    // Clear all local data and sign out
-    clearAllData();
-    setSignedIn(false);
+    // Show confirmation dialog before deletion
+    Alert.alert(
+      getTranslation('deleteAccountConfirm', 'Delete Account'),
+      getTranslation('deleteAccountWarning', 'This will permanently delete your account, all your posts, comments, and data. This action cannot be undone.'),
+      [
+        { text: getTranslation('cancel', 'Cancel'), style: 'cancel' },
+        {
+          text: getTranslation('delete', 'Delete'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Cancel all pending notifications before clearing data
+              await cancelAllPrayerNotifications();
+
+              // ---------------------------------------------------------
+              // SAFETY MODEL (avoids orphaned accounts)
+              // Deletion runs in two remote steps that must be ordered:
+              //   A) wipe the backend record (posts/comments/devices/user)
+              //   B) delete the Firebase Auth account
+              // The backend wipe requires a verified ID token, so it can
+              // only run while the auth user still exists — B cannot come
+              // first. To avoid an orphaned account (backend data with no
+              // living owner able to sign in and remove it), step B runs
+              // ONLY after step A is CONFIRMED by the server. Any failure
+              // in A aborts the flow with the Firebase account intact, so
+              // the user can simply retry — nothing is half-deleted.
+              // ---------------------------------------------------------
+
+              // ---- Step 0: re-auth IMMEDIATELY before mutating anything --
+              // Firebase requires a recent login for user.delete(); asking
+              // here (right before execution, after the dialogs) keeps the
+              // session maximally fresh. No mutation has happened yet, so
+              // an abort at this point is always safe.
+              if (isFirebaseConfigured()) {
+                let reauth = { ok: false, reason: 'auth/missing-credentials' };
+                if (isGoogleUser) {
+                  reauth = await ensureFreshLogin({ isGoogleUser: true });
+                } else if (account?.password) {
+                  reauth = await ensureFreshLogin({
+                    isGoogleUser: false,
+                    email: account.email,
+                    password: account.password,
+                  });
+                }
+                if (!reauth.ok && !reauth.reason?.includes('no-current-user')) {
+                  // Session too old / re-auth failed — ask for credentials.
+                  const creds = await promptForPassword(
+                    getTranslation('reauthPasswordTitle', 'Confirm your password'),
+                    getTranslation('reauthPasswordMessage', 'Deleting your account is permanent. Please enter your password to continue.')
+                  );
+                  if (!creds) {
+                    return; // user aborted — nothing has been mutated
+                  }
+                  reauth = await ensureFreshLogin({
+                    isGoogleUser: false,
+                    email: account.email,
+                    password: creds,
+                  });
+                }
+                if (!reauth.ok) {
+                  Alert.alert(
+                    getTranslation('error', 'Error'),
+                    friendlyFirebaseError({ code: reauth.reason }, language || 'tr')
+                  );
+                  return;
+                }
+
+                // -------------------------------------------------------
+                // Step A: wipe backend data (STRICT — hard stop on failure)
+                // Throws on network/server failure so we NEVER proceed to
+                // deleting the auth account on a partial wipe. A 404 counts
+                // as success (no backend record = nothing left to delete).
+                // -------------------------------------------------------
+                if (account?.email) {
+                  try {
+                    const wiped = await deleteServerUser(account.email, { strict: true });
+                    if (!wiped) {
+                      throw new Error('server did not confirm deletion');
+                    }
+                  } catch (serverError) {
+                    // HARD STOP: Firebase account stays intact and signed in.
+                    console.error('Backend wipe failed — aborting deletion:', serverError?.message || serverError);
+                    Alert.alert(
+                      getTranslation('error', 'Error'),
+                      getTranslation(
+                        'deleteServerWipeFailed',
+                        'Your account data could not be deleted from the server. Your Firebase account was kept intact — please check your connection and try again.'
+                      )
+                    );
+                    return;
+                  }
+                }
+
+                // -------------------------------------------------------
+                // Step B: delete the Firebase Auth account.
+                // Step A is confirmed, so this cannot orphan backend data.
+                // If B fails mid-transit the backend is already clean — the
+                // leftover auth account has no data attached and the user is
+                // told exactly what happened instead of a generic error.
+                // -------------------------------------------------------
+                try {
+                  await firebaseDeleteAccount();
+                } catch (authDeleteError) {
+                  console.error('Firebase account deletion failed:', authDeleteError?.message || authDeleteError);
+                  // Backend is clean; sign out and clear local data anyway.
+                  await firebaseSignOut().catch(() => {});
+                  await signOutGoogle().catch(() => {});
+                  await clearAllData();
+                  setSignedIn(false);
+                  setAccount({ fullName: '', email: '', password: '' });
+                  setProfilePicture('');
+                  setIsGoogleUser(false);
+                  Alert.alert(
+                    getTranslation('accountDeleted', 'Account Deleted'),
+                    getTranslation(
+                      'deleteAuthOnlyFailed',
+                      'Your account data was deleted. Only the sign-in record could not be removed — please contact support.'
+                    )
+                  );
+                  return;
+                }
+              } else if (account?.email) {
+                // Firebase unavailable — wipe the backend profile only.
+                try {
+                  const wiped = await deleteServerUser(account.email, { strict: true });
+                  if (!wiped) throw new Error('server did not confirm deletion');
+                } catch (serverError) {
+                  console.error('Backend wipe failed:', serverError?.message || serverError);
+                  Alert.alert(
+                    getTranslation('error', 'Error'),
+                    getTranslation(
+                      'deleteServerWipeFailed',
+                      'Your account data could not be deleted from the server. Please check your connection and try again.'
+                    )
+                  );
+                  return;
+                }
+              }
+
+              // Clear all local data
+              await clearAllData();
+
+              // Sign out from Firebase (no-op when already deleted)
+              if (isFirebaseConfigured()) {
+                await firebaseSignOut();
+              }
+
+              // Sign out from Google
+              await signOutGoogle().catch(() => {});
+
+              // Reset local state
+              setSignedIn(false);
+              setAccount({ fullName: '', email: '', password: '' });
+              setProfilePicture('');
+              setIsGoogleUser(false);
+
+              Alert.alert(
+                getTranslation('accountDeleted', 'Account Deleted'),
+                getTranslation('accountDeletedMessage', 'Your account has been permanently deleted.')
+              );
+            } catch (error) {
+              console.error('Account deletion failed:', error);
+              Alert.alert(
+                getTranslation('error', 'Error'),
+                friendlyFirebaseError(error, language || 'tr')
+              );
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleChangeEmailPress = () => {
@@ -480,7 +683,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     {/* ---- Edit Profile Modal ---- */}
       <Modal visible={profileModalOpen} transparent animationType="fade" onRequestClose={() => setProfileModalOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalScroll}>
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('editProfileTitle', 'Edit Profile')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('editProfileMessage', 'Update your account information below.')}</Text>
@@ -574,7 +777,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       {/* ---- Change Email Modal ---- */}
       <Modal visible={emailModalOpen} transparent animationType="fade" onRequestClose={() => setEmailModalOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalScroll}>
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('changeEmailTitle', 'Change Email')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('changeEmailMessage', 'Enter your new email address.')}</Text>
@@ -608,7 +811,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       {/* ---- Change Password Modal ---- */}
       <Modal visible={passwordModalOpen} transparent animationType="fade" onRequestClose={() => setPasswordModalOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalScroll}>
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('changePasswordTitle', 'Change Password')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('changePasswordMessage', 'For security, enter your current password, then create your new password.')}</Text>
@@ -663,7 +866,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
       {/* ---- Profile Picture Source Modal ---- */}
       <Modal visible={pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(false)}>
         <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalScroll}>
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScroll}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{getTranslation('profilePictureTitle', 'Profile Picture')}</Text>
             <Text style={styles.modalMessage}>{getTranslation('profilePictureMessage', 'Choose a source for your new profile picture.')}</Text>
@@ -697,6 +900,49 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
             </View>
           </View>
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ---- Password re-auth modal (used by Delete Account) ---------------- */}
+      <Modal
+        visible={reauthModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => resolveReauth(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{reauthModalTitle.title}</Text>
+            <Text style={styles.modalMessage}>{reauthModalTitle.message}</Text>
+            <TextInput
+              value={reauthPassword}
+              onChangeText={setReauthPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={getTranslation('passwordLogin', 'Your password')}
+              placeholderTextColor="#8ea4b3"
+              style={styles.input}
+            />
+            <View style={styles.modalButtonRow}>
+              <Pressable
+                style={styles.modalCancelButton}
+                onPress={() => resolveReauth(null)}
+              >
+                <Text style={styles.modalCancelButtonText}>
+                  {getTranslation('cancel', 'Cancel')}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.modalButton}
+                onPress={() => resolveReauth(reauthPassword || null)}
+              >
+                <Text style={styles.modalButtonText}>
+                  {getTranslation('confirm', 'Confirm')}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </Modal>
 

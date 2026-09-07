@@ -9,11 +9,11 @@
 // The API mirrors the Firebase JS SDK but is namespaced and auto-initialised
 // from the native config (no initializeApp call needed).
 
-import { getAuth } from '@react-native-firebase/auth';
+import { getAuth, EmailAuthProvider } from '@react-native-firebase/auth';
 
 /* Initialise + return the native auth instance. Reads config from
    google-services.json automatically. Returns null if the module isn't ready
-   (e.g. not configured / running in Expo Go). */
+   (e.g. not configured / running in Expo Go). Never throws. */
 export function firebaseAuthInstance() {
   try {
     return getAuth();
@@ -33,42 +33,75 @@ export function isFirebaseConfigured() {
   }
 }
 
+/** Throw an auth-not-configured error so callers can show a friendly message. */
+function requireAuth() {
+  const auth = firebaseAuthInstance();
+  if (!auth) {
+    const err = /** @type {any} */ (new Error('Firebase auth is not configured in this build.'));
+    err.code = 'auth/not-configured';
+    throw err;
+  }
+  return auth;
+}
+
 /** Create a new Firebase account (email + password). Returns the auth user. */
 export async function firebaseSignUp(email, password) {
-  const auth = getAuth();
+  const auth = requireAuth();
   const cred = await auth.createUserWithEmailAndPassword(email, password);
   return cred.user;
 }
 
 /** Sign in an existing user (email + password). Returns the auth user. */
 export async function firebaseSignIn(email, password) {
-  const auth = getAuth();
+  const auth = requireAuth();
   const cred = await auth.signInWithEmailAndPassword(email, password);
   return cred.user;
 }
 
 /** Send a password-reset email to the given address. */
 export async function firebaseSendPasswordReset(email) {
-  const auth = getAuth();
+  const auth = requireAuth();
   await auth.sendPasswordResetEmail(email);
 }
 
 /** Sign out the current Firebase user. */
 export async function firebaseSignOut() {
-  const auth = getAuth();
-  await auth.signOut();
+  const auth = firebaseAuthInstance();
+  if (!auth) return; // nothing to sign out of
+  try {
+    await auth.signOut();
+  } catch (error) {
+    console.warn('firebaseSignOut failed:', error?.message || error);
+  }
 }
 
 /** Observe auth state changes (returns an unsubscribe function). */
 export function onFirebaseAuthChanged(callback) {
-  const auth = getAuth();
+  const auth = firebaseAuthInstance();
+  if (!auth || typeof auth.onAuthStateChanged !== 'function') return () => {};
   return auth.onAuthStateChanged(callback);
 }
 
 /** The currently signed-in user (or null). */
 export function getCurrentFirebaseUser() {
-  const auth = getAuth();
+  const auth = firebaseAuthInstance();
   return auth ? auth.currentUser || null : null;
+}
+
+/**
+ * Sign in to Firebase with a Google ID token (obtained from the native
+ * Google Sign-In module). Returns the signed-in Firebase user.
+ *
+ * @param {string} idToken - Google identity token from GoogleSignin.signIn()
+ * @returns {Promise<object>} the Firebase user
+ * @throws when Firebase auth is unavailable or the credential is rejected.
+ */
+export async function signInWithGoogleIdToken(idToken) {
+  const auth = requireAuth();
+  const { GoogleAuthProvider } = await import('@react-native-firebase/auth');
+  const credential = GoogleAuthProvider.credential(idToken);
+  const userCredential = await auth.signInWithCredential(credential);
+  return userCredential.user;
 }
 
 /** Update the current user's display name and/or photo URL. */
@@ -119,7 +152,7 @@ const EMAIL_LINK_REDIRECT_URL = 'com.joshua.islamiogreniyorum://email-link';
  * @returns {Promise<void>}
  */
 export async function sendSignInLink(email, lang = 'tr') {
-  const auth = getAuth();
+  const auth = requireAuth();
   const actionCodeSettings = {
     url: EMAIL_LINK_REDIRECT_URL,
     handleCodeInApp: true,
@@ -140,27 +173,120 @@ export async function sendSignInLink(email, lang = 'tr') {
  * @returns {Promise<object>} the auth user credential
  */
 export async function signInWithEmailLink(email, link) {
-  const auth = getAuth();
+  const auth = requireAuth();
   const cred = await auth.signInWithEmailLink(email, link);
   return cred.user;
 }
 
 /**
  * Returns true if a given URL is a Firebase email-link sign-in link.
+ * Returns false (never throws) when Firebase auth is not configured, so the
+ * deep-link handler at app startup never crashes on an unconfigured build.
  * @param {string} url
  */
 export function isEmailSignInLink(url) {
-  const auth = getAuth();
-  return auth.isSignInWithEmailLink(url);
+  const auth = firebaseAuthInstance();
+  if (!auth || typeof auth.isSignInWithEmailLink !== 'function') return false;
+  try {
+    return auth.isSignInWithEmailLink(url);
+  } catch {
+    return false;
+  }
 }
 
 /** Re-authenticate the user with email+password before sensitive updates. */
 export async function firebaseReauthenticate(email, password) {
-  const auth = getAuth();
+  const auth = requireAuth();
   const user = auth.currentUser;
   if (!user) throw new Error('auth/no-current-user');
-  const credential = auth.EmailAuthProvider.credential(email, password);
+  // Modern @react-native-firebase/auth exposes EmailAuthProvider as a top-level
+  // module export, not a property on the auth instance (auth.EmailAuthProvider
+  // is undefined in v21+, which would crash credential()). Using the module
+  // import keeps the password re-auth flow working.
+  const credential = EmailAuthProvider.credential(email, password);
   await user.reauthenticateWithCredential(credential);
+}
+
+/**
+ * Re-authenticate a Google-signed-in user before a sensitive operation
+ * (e.g. account deletion). Google accounts re-auth by re-acquiring a fresh
+ * Google ID token via the native sign-in module and exchanging it for a
+ * GoogleAuthProvider credential.
+ *
+ * @returns {Promise<void>} resolves on success, throws on failure.
+ */
+export async function firebaseReauthenticateGoogle() {
+  const auth = requireAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('auth/no-current-user');
+  // Ask the native Google Sign-In module for a fresh ID token. googleAuth.js
+  // is lazily imported to avoid a circular dependency at module load time.
+  const { getFreshGoogleIdToken } = await import('./googleAuth.js');
+  const idToken = await getFreshGoogleIdToken();
+  if (!idToken) throw new Error('auth/no-google-token');
+  const { GoogleAuthProvider } = await import('@react-native-firebase/auth');
+  const credential = GoogleAuthProvider.credential(idToken);
+  await user.reauthenticateWithCredential(credential);
+}
+
+/**
+ * Re-authenticate the current user with whichever provider they signed in with.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.isGoogleUser  true when the session is a Google account
+ * @param {string} [opts.email]        account email (password re-auth)
+ * @param {string} [opts.password]     account password (password re-auth)
+ * @returns {Promise<{ok: boolean, reason?: string}>}
+ *   ok=true when re-auth succeeded (or was not needed).
+ */
+export async function ensureFreshLogin({ isGoogleUser, email, password } = {}) {
+  const auth = firebaseAuthInstance();
+  const user = auth ? auth.currentUser : null;
+  if (!user) return { ok: false, reason: 'auth/no-current-user' };
+  try {
+    // RNFB returns metadata times as Date objects; the web SDK uses ISO
+    // strings. Normalise both to epoch milliseconds. Treat sessions newer
+    // than 5 minutes as fresh enough that Firebase will not complain.
+    const raw = user.metadata?.lastSignInTime;
+    const last =
+      raw instanceof Date
+        ? raw.getTime()
+        : typeof raw === 'string'
+          ? Date.parse(raw)
+          : Number(raw);
+    if (Number.isFinite(last) && last > 0 && Date.now() - last < 5 * 60 * 1000) {
+      return { ok: true };
+    }
+  } catch {
+    // metadata unavailable — fall through and re-auth anyway.
+  }
+  try {
+    if (isGoogleUser) {
+      await firebaseReauthenticateGoogle();
+    } else {
+      if (!email || !password) {
+        return { ok: false, reason: 'auth/missing-credentials' };
+      }
+      await firebaseReauthenticate(email, password);
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: String(error?.code || error?.message || 'auth/reauth-failed') };
+  }
+}
+
+/**
+ * Permanently delete the Firebase Auth account of the currently signed-in
+ * user. Requires a recent login — call ensureFreshLogin() first, otherwise
+ * Firebase throws auth/requires-recent-login.
+ *
+ * @returns {Promise<void>}
+ */
+export async function firebaseDeleteAccount() {
+  const auth = requireAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('auth/no-current-user');
+  await user.delete();
 }
 
 /**
@@ -222,6 +348,9 @@ export function friendlyFirebaseError(error, lang = 'tr') {
     'auth/no-current-user': t
       ? 'Oturum açmış kullanıcı bulunamadı.'
       : 'No signed-in user was found.',
+    'auth/not-configured': t
+      ? 'Firebase kimlik doğrulama bu derlemede etkin değil. Lütfen uygulamayı güncelleyin.'
+      : 'Firebase auth is not enabled in this build. Please update the app.',
   };
 
   for (const [suffix, text] of Object.entries(map)) {

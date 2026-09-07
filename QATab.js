@@ -39,6 +39,32 @@ const UserAvatar = ({ avatarUrl, avatar, style }) => {
 // passed-in style is a fixed-size image style, so layer a text style under it.
 const stylesFallbackText = { fontSize: 18 };
 
+/**
+ * Tappable source links shown under a web-search answer (provider
+ * 'google-search'). Rendered from the structured `sources` array that the
+ * backend returns so links open in the browser with one tap.
+ */
+const AISources = ({ sources, styles }) => {
+  if (!Array.isArray(sources) || sources.length === 0) return null;
+  return (
+    <View style={styles.aiSourcesWrap}>
+      {sources.map((s, i) => (
+        <Pressable
+          key={s.url || i}
+          style={styles.aiSourceItem}
+          onPress={() => {
+            if (s.url) Linking.openURL(s.url).catch(() => {});
+          }}
+        >
+          <Text numberOfLines={1} style={styles.aiSourceTitle}>
+            🔎 {s.source || s.title || s.url}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+};
+
 
 const QATab = ({
   styles,
@@ -283,7 +309,7 @@ const QATab = ({
                   {item.aiAnswer && (
                     <View style={styles.aiBadgeWrap}>
                       <Text style={styles.aiBadge}>
-                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                       </Text>
                     </View>
                   )}
@@ -305,6 +331,7 @@ const QATab = ({
                             </View>
                           </View>
                           <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                          <AISources sources={ans.sources} styles={styles} />
                           <TranslateButton text={ans.text} t={t} uiLang={language} />
                           <View style={styles.qaAnswerFooter}>
                             <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>
@@ -446,7 +473,7 @@ const QATab = ({
                 {item.aiAnswer && (
                   <View style={styles.aiBadgeWrap}>
                     <Text style={styles.aiBadge}>
-                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                     </Text>
                   </View>
                 )}
@@ -468,6 +495,7 @@ const QATab = ({
                           </View>
                         </View>
                         <Text style={styles.qaAnswerText}>{ans.text}</Text>
+                        <AISources sources={ans.sources} styles={styles} />
                         <TranslateButton text={ans.text} t={t} uiLang={language} />
                         <View style={styles.qaAnswerFooter}>
                           <Text style={styles.qaAnswerTime}>{ans.timestamp}</Text>

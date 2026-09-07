@@ -61,11 +61,7 @@ import { uploadCommunityMedia, uploadProfileImage } from './mediaService.js';
 import { precacheAvatars, cleanupTempFiles } from './avatarCache.js';
 import { API_URL } from './config.js';
 import {
-  saveAccount,
-  loadAccount,
-  clearAccount,
-  saveProfile,
-  loadProfile,
+  clearAllData,
   saveSettings,
   loadSettings,
   saveWelcomeShown,
@@ -74,13 +70,10 @@ import {
   loadQAndA,
   saveCommunityPosts,
   loadCommunityPosts,
-  clearAllData,
   saveDeletedItems,
   loadDeletedItems,
   loadProfileDirectory,
   saveProfileDirectory,
-  saveProfileForEmail,
-  loadProfileForEmail,
 } from './storage.js';
 import PrayerTab from './PrayerTab.js';
 import QATab from './QATab.js';
@@ -100,17 +93,38 @@ import {
   sendSignInLink,
   signInWithEmailLink,
   isEmailSignInLink,
+  getCurrentFirebaseUser,
 } from './firebaseAuth.js';
-import { cloudSaveProfile, cloudFetchProfile } from './cloudSync.js';
+import { cloudSaveProfile, cloudFetchProfile, cloudUpdateQuestion, cloudUpdateAnswer, cloudUpdatePost, cloudUpdateComment } from './cloudSync.js';
 
 /** Resolve the promise unless it takes longer than `ms`, in which case resolve
- *  with `fallback`. Keeps button spinners from hanging on a stalled socket. */
+ *  with `fallback`. Keeps button spinners from hanging on a stalled socket.
+ *  Fixed: uses a settled flag to prevent race conditions where both the timer
+ *  and the promise could resolve. */
 function withTimeout(promise, ms, fallback) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
     promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      () => { clearTimeout(timer); resolve(fallback); }
+      (v) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      }
     );
   });
 }
@@ -191,45 +205,43 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // Load persisted state on startup
   useEffect(() => {
     (async () => {
-      const savedAccount = await loadAccount();
-      if (savedAccount) {
-        setAccount(savedAccount);
+      const user = getCurrentFirebaseUser();
+      if (user) {
+        // User is already authenticated with Firebase, fetch account from cloud
         setSignedIn(true);
-      }
-
-      // Profile is stored in the CLOUD (backend). On startup we try the cloud
-      // first so logout / uninstall / device change never loses data. The
-      // on-device copy is only a fast cache for offline startup.
-      const profileEmail =
-        (savedAccount && savedAccount.email) ||
-        (savedAccount && savedAccount.pendingEmail) ||
-        null;
-      let savedProfile = null;
-      if (profileEmail) {
         try {
-          savedProfile = await cloudFetchProfile(profileEmail);
-        } catch (_e) { /* offline — fall through to device cache */ }
-      }
-      if (!savedProfile) {
-        savedProfile = profileEmail
-          ? (await loadProfileForEmail(profileEmail)) || (await loadProfile())
-          : await loadProfile();
-      }
-      if (savedProfile) {
-        setOccupation(savedProfile.occupation || '');
-        setAddress(savedProfile.address || '');
-        setBio(savedProfile.bio || '');
-        setProfilePicture(savedProfile.profilePicture || '');
-        setProfileSetupComplete(true);
-        // Warm the avatar cache so the user's own picture renders offline too.
-        precacheAvatars([savedProfile.profilePicture]);
-        // Sync the profile picture to the account so it persists across sessions
-        if (savedProfile.profilePicture && savedAccount) {
-          const updatedAccount = { ...savedAccount, profilePicture: savedProfile.profilePicture };
-          setAccount(updatedAccount);
-          saveAccount(updatedAccount);
+          const serverUser = await fetchServerUser(user.email);
+          const merged = {
+            email: user.email?.toLowerCase() || '',
+            fullName: serverUser?.fullName || user.displayName || '',
+            password: '',
+            profilePicture: serverUser?.profilePicture || user.photoURL || '',
+            uid: user.uid,
+            authProvider: 'firebase',
+          };
+          setAccount(merged);
+          
+          if (serverUser) {
+            setProfilePicture(serverUser.profilePicture || '');
+            setOccupation(serverUser.occupation || '');
+            setAddress(serverUser.address || '');
+            setBio(serverUser.bio || '');
+            setProfileSetupComplete(true);
+            precacheAvatars([serverUser.profilePicture]);
+          }
+        } catch (_e) {
+          // Offline - set basic account from Firebase user
+          setAccount({
+            email: user.email?.toLowerCase() || '',
+            fullName: user.displayName || '',
+            password: '',
+            profilePicture: user.photoURL || '',
+            uid: user.uid,
+            authProvider: 'firebase',
+          });
         }
       }
+      // No local account loading - everything comes from cloud
 
       const savedSettings = await loadSettings();
       if (savedSettings) {
@@ -330,7 +342,13 @@ const [profileDirectory, setProfileDirectory] = useState({});
         isEmailSignInLink(url);
       if (looksLikeSignIn && !signedIn) {
         setEmailLinkPending(true);
-        handleEmailLink(innerLink);
+        handleEmailLink(innerLink).catch((error) => {
+          // Unauthenticated sign-in failed (e.g. Firebase not configured, bad
+          // link, no matching email). The user should still be able to use the
+          // app as a guest — never let this reject into an unhandled promise.
+          console.warn('handleEmailLink failed:', error?.message || error);
+          setEmailLinkPending(false);
+        });
       }
     } catch (_e) {
       // Not a sign-in link (or Firebase unconfigured) — ignore.
@@ -339,13 +357,24 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
   useEffect(() => {
     let mounted = true;
-    // Cold start: check if the app was launched from a link
-    Linking.getInitialURL().then((url) => {
-      if (mounted) processEmailLink(url);
-    });
+    // Cold start: check if the app was launched from a link.
+    // getInitialURL() can reject on some Android intent configurations, so
+    // we must catch to avoid an unhandled promise rejection that crashes the
+    // React Native bridge on startup.
+    Linking.getInitialURL()
+      .then((url) => {
+        if (mounted) processEmailLink(url);
+      })
+      .catch((error) => {
+        console.warn('getInitialURL failed:', error?.message || error);
+      });
     // Foreground / background -> foreground
     const sub = Linking.addEventListener('url', (event) => {
-      processEmailLink(event.url);
+      try {
+        processEmailLink(event.url);
+      } catch (error) {
+        console.warn('Deep link processing failed:', error?.message || error);
+      }
     });
     return () => {
       mounted = false;
@@ -458,10 +487,27 @@ const [profileDirectory, setProfileDirectory] = useState({});
     return () => subscription.remove();
   }, []);
 
+  // Keep a ref to the signed-in user's email so we can unregister the device
+  // on sign-out even after account.email is cleared (React batches the
+  // setAccount + setSignedIn updates, so account.email is already '' when the
+  // sign-out effect runs).
+  const userEmailRef = React.useRef('');
+  useEffect(() => {
+    if (signedIn && account.email) {
+      userEmailRef.current = account.email;
+    }
+  }, [signedIn, account?.email]);
+
   // Unregister the device from the backend when the user signs out
   useEffect(() => {
-    if (!signedIn && account.email) {
-      unregisterDeviceFromBackend(account.email);
+    if (!signedIn && userEmailRef.current) {
+      unregisterDeviceFromBackend(userEmailRef.current);
+    }
+    // Reset the registration flag on sign-out so the device is re-registered
+    // when the user signs back in (otherwise the ref stays true and the
+    // registration effect returns early, leaving the device unregistered).
+    if (!signedIn) {
+      deviceRegRanRef.current = false;
     }
   }, [signedIn]);
 
@@ -469,12 +515,33 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // signed in and the app finishes hydrating. Device tokens must be re-sent on
   // every launch (fresh install, token rotation) or cross-user notifications
   // (comments / likes / answers) can never reach this device.
+  //
+  // Registration is retried a few times with backoff: on a cold launch the
+  // network may not be ready and the first attempt fails silently. Without a
+  // retry that device would be missing from the registry for the whole
+  // session and never receive cross-user notifications.
   const deviceRegRanRef = React.useRef(false);
   useEffect(() => {
     if (!hydrated || !signedIn || !account?.email || !notificationsOn) return;
     if (deviceRegRanRef.current) return;
     deviceRegRanRef.current = true;
-    registerDeviceWithBackend(account.email, account.fullName).catch(() => {});
+    const attemptRegistration = (attempt) => {
+      registerDeviceWithBackend(account.email, account.fullName)
+        .then((ok) => {
+          // Retry up to 3 times with backoff on failure (network blips at launch).
+          if (!ok && attempt < 3) {
+            setTimeout(() => attemptRegistration(attempt + 1), 3000 * attempt);
+          } else if (!ok) {
+            console.warn('Push device registration failed after retries.');
+          }
+        })
+        .catch(() => {
+          if (attempt < 3) {
+            setTimeout(() => attemptRegistration(attempt + 1), 3000 * attempt);
+          }
+        });
+    };
+    attemptRegistration(1);
   }, [hydrated, signedIn, account?.email, account?.fullName, notificationsOn]);
 
   // Schedule or cancel prayer notifications based on settings
@@ -755,20 +822,10 @@ const [profileDirectory, setProfileDirectory] = useState({});
           };
           setAccount(accountToSave);
           setSignedIn(true);
-          saveAccount(accountToSave);
+          // Do NOT save account locally - it's stored in the cloud
 
           // Mirror the account on the backend so it survives reinstalls.
           registerUserProfile(accountToSave.email, accountToSave.fullName, null, accountToSave.profilePicture || null);
-
-          // Persist the signup profile PER EMAIL so Settings → Edit Profile
-          // can pre-fill and edit it later (keyed by this email).
-          saveProfileForEmail(accountToSave.email, {
-            fullName: accountToSave.fullName,
-            profilePicture: accountToSave.profilePicture || '',
-            occupation: '',
-            address: '',
-            bio: '',
-          }).catch(() => {});
 
           // CLOUD: write the full profile to the backend so it survives logout / uninstall.
           cloudSaveProfile(accountToSave.email, accountToSave.fullName, accountToSave.profilePicture, {
@@ -804,47 +861,31 @@ const [profileDirectory, setProfileDirectory] = useState({});
         // Sign in with Firebase (email + password).
         const firebaseUser = await firebaseSignIn(account.email.trim(), account.password);
 
-        // Keep any local display name, otherwise let the user fill it in.
-        const savedAccount = await loadAccount();
+        // Fetch account data from cloud server first
+        const serverUser = await fetchServerUser((firebaseUser.email || account.email).toLowerCase());
+        
         const merged = {
-          ...(savedAccount || {}),
           email: (firebaseUser.email || account.email).toLowerCase(),
-          fullName: savedAccount?.fullName || account.fullName || '',
+          fullName: serverUser?.fullName || firebaseUser.displayName || account.fullName || '',
           password: '',
+          profilePicture: serverUser?.profilePicture || firebaseUser.photoURL || '',
           uid: firebaseUser.uid,
           authProvider: 'firebase',
         };
         setAccount(merged);
         setSignedIn(true);
-        saveAccount(merged);
+        // Do NOT save account locally - it's stored in the cloud
+        
+        // Set profile data from cloud
+        if (serverUser) {
+          setProfilePicture(serverUser.profilePicture || '');
+          setOccupation(serverUser.occupation || '');
+          setAddress(serverUser.address || '');
+          setBio(serverUser.bio || '');
+          setProfileSetupComplete(true);
+        }
 
-        // Refresh the display name AND profile picture from the server copy,
-        // best-effort. This is what survives an uninstall/reinstall: the local
-        // AsyncStorage is wiped, so on a fresh login we must pull the avatar URL
-        // back from the backend so it isn't lost until the user visits Settings.
-        fetchServerUser(merged.email).then((serverUser) => {
-          if (!serverUser) return;
-          const enriched = { ...merged };
-          if (serverUser.fullName) enriched.fullName = serverUser.fullName;
-          if (serverUser.profilePicture) {
-            enriched.profilePicture = serverUser.profilePicture;
-            setProfilePicture(serverUser.profilePicture);
-          }
-          setAccount(enriched);
-          saveAccount(enriched);
-          // Persist per-email so Settings → Edit Profile can pre-fill it.
-          saveProfileForEmail(merged.email, {
-            fullName: enriched.fullName || '',
-            profilePicture: enriched.profilePicture || '',
-            occupation: '',
-            address: '',
-            bio: '',
-          }).catch(() => {});
-        }).catch(() => {});
-
-        registerUserProfile(merged.email, merged.fullName, null, merged.profilePicture || null);
         // CLOUD: ensure the profile is written to the backend on every login
-        // so a fresh install that pulls from cloud sees the latest data.
         cloudSaveProfile(merged.email, merged.fullName, merged.profilePicture, {
           occupation: '',
           address: '',
@@ -917,41 +958,44 @@ const [profileDirectory, setProfileDirectory] = useState({});
       return;
     }
 
-    // Set the account from Google's profile
+    // The native flow signs the user into FIREBASE. The Firebase session is
+    // the source of truth (it carries verified email, UID and photoURL), so
+    // hydrate the account from it and fall back to Google's profile payload.
+    const fbUser = getCurrentFirebaseUser();
+    const email = (fbUser?.email || result.user.email || '').toLowerCase();
     const googleAccount = {
-      fullName: result.user.name,
-      email: result.user.email,
+      fullName: fbUser?.displayName || result.user.name || '',
+      email,
       password: '',
-      profilePicture: result.user.picture || '',
+      profilePicture: fbUser?.photoURL || result.user.picture || '',
+      uid: fbUser?.uid || undefined,
+      authProvider: 'google',
     };
     setAccount(googleAccount);
 
-    // Use Google's profile picture
-    setProfilePicture(result.user.picture);
+    // Use the profile picture (Google photo now lives on the Firebase user).
+    setProfilePicture(googleAccount.profilePicture);
     setIsGoogleUser(true);
     setSignedIn(true);
     setIsNewUser(false);
     setProfileSetupComplete(true);
-    saveAccount(googleAccount);
-    // Keep the Google avatar when the profile is reloaded from storage.
-    saveProfile({
-      occupation,
-      address,
-      bio,
-      profilePicture: result.user.picture,
-    });
-    // Mirror the Google account on the backend (best-effort).
-    registerUserProfile(result.user.email, result.user.name, null, result.user.picture || null);
+    // Do NOT save account locally - it's stored in the cloud
+
+    // Mirror the Google account on the backend (best-effort). The Firebase ID
+    // token is attached automatically by the register/verify layer, so the
+    // server stores this profile against a VERIFIED identity now.
+    registerUserProfile(googleAccount.email, googleAccount.fullName, null, googleAccount.profilePicture || null);
 
     // CLOUD: write the full profile so it survives logout / uninstall.
-    cloudSaveProfile(result.user.email, result.user.name, result.user.picture || null, {
+    cloudSaveProfile(googleAccount.email, googleAccount.fullName, googleAccount.profilePicture || null, {
       occupation: '',
       address: '',
       bio: '',
     }).catch(() => {});
 
-    // Register this device with the push notification backend
-    registerDeviceWithBackend(result.user.email, result.user.name);
+    // Register this device with the push notification backend (now works —
+    // the user has a real Firebase session).
+    registerDeviceWithBackend(googleAccount.email, googleAccount.fullName);
   };
 
   const handleGoogleSignIn = async () => {
@@ -980,9 +1024,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // completes the sign-in. State is persisted so the link can be processed
   // even if the app was cold-started from the email tap.
 
-  const handleSendEmailLink = async () => {
+    const handleSendEmailLink = async () => {
     const email = (account.email || '').trim();
-    if (!email || !email.includes('@')) {
+    // Use a regex for proper email validation instead of just checking for '@'
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
       Alert.alert(
         t.invalidLogin || 'Email required',
         language === 'tr' ? 'Lütfen geçerli bir e-posta girin.' : 'Please enter a valid email.'
@@ -1000,9 +1046,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
     try {
       await sendSignInLink(email, language);
       setEmailLinkSent(true);
-      // Save the email so we can use it when the link is received later,
-      // even if the app is closed/reopened between sending and opening.
-      saveAccount({ fullName: account.fullName, email, password: '' });
+      // Do NOT save account locally - email will be retrieved from Firebase when link is opened
       Alert.alert(
         language === 'tr' ? 'E-posta gönderildi' : 'Email sent',
         language === 'tr'
@@ -1023,17 +1067,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // Called either from a deep link (cold start / foreground) or during
   // initial app load to replay a pending link from storage.
   const handleEmailLink = async (link) => {
-    let email = (account.email || '').trim();
-    // Cold start: the deep-link handler can fire before the saved account is
-    // hydrated into state, so fall back to the persisted email.
-    if (!email) {
-      const saved = await loadAccount().catch(() => null);
-      email = (saved?.email || '').trim();
-    }
+    // Check link FIRST — without a link we cannot do anything regardless of email.
     if (!link) return false;
+    let email = (account.email || '').trim();
+    // Since we don't store account locally, if email is not in state,
+    // we cannot proceed with email link sign-in.
     if (!email) {
-      // Firebase needs the email to complete sign-in; if the link was opened
-      // on a device that never requested it we can't proceed silently.
       Alert.alert(
         t.invalidLogin || 'Sign-in link',
         language === 'tr'
@@ -1045,22 +1084,31 @@ const [profileDirectory, setProfileDirectory] = useState({});
     }
     try {
       const user = await signInWithEmailLink(email, link);
+      const serverUser = await fetchServerUser(user.email || email).catch(() => null);
       const emailLinkAccount = {
-        fullName: user.displayName || account.fullName,
+        fullName: serverUser?.fullName || user.displayName || account.fullName,
         email: user.email || email,
         password: '',
-        profilePicture: user.photoURL || profilePicture || '',
+        profilePicture: serverUser?.profilePicture || user.photoURL || profilePicture || '',
       };
       setAccount(emailLinkAccount);
-      setProfilePicture(user.photoURL || profilePicture);
+      setProfilePicture(serverUser?.profilePicture || user.photoURL || profilePicture);
       setSignedIn(true);
       setIsNewUser(false);
       setProfileSetupComplete(true);
       setIsGoogleUser(false);
-      saveAccount(emailLinkAccount);
-      registerUserProfile(user.email || email, user.displayName || account.fullName, null, account.profilePicture || null);
+      // Do NOT save account locally - it's stored in the cloud
+      
+      // Set profile data from cloud
+      if (serverUser) {
+        setOccupation(serverUser.occupation || '');
+        setAddress(serverUser.address || '');
+        setBio(serverUser.bio || '');
+      }
+      
+      registerUserProfile(user.email || email, serverUser?.fullName || user.displayName || account.fullName, null, serverUser?.profilePicture || user.photoURL || profilePicture || null);
       // CLOUD: write the full profile so it survives logout / uninstall.
-      cloudSaveProfile(user.email || email, user.displayName || account.fullName, account.profilePicture || null, {
+      cloudSaveProfile(user.email || email, serverUser?.fullName || user.displayName || account.fullName, serverUser?.profilePicture || user.photoURL || profilePicture || null, {
         occupation: '',
         address: '',
         bio: '',
@@ -1099,12 +1147,9 @@ const [profileDirectory, setProfileDirectory] = useState({});
       }
     }
     setProfilePicture(finalPicture);
-    // Persist to BOTH device cache (fast offline access) AND cloud (survives
-    // logout / uninstall / device change). The cloud copy is authoritative.
-    saveProfile({ occupation, address, bio, profilePicture: finalPicture });
+    // Profile data is stored in the cloud, no need to save locally
     const updatedAccount = { ...account, profilePicture: finalPicture || '' };
     setAccount(updatedAccount);
-    saveAccount(updatedAccount);
     setIsNewUser(false);
     setProfileSetupComplete(true);
     if (account.email) {
@@ -1115,7 +1160,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
         fullName: account.fullName || account.email.split('@')[0],
         profilePicture: finalPicture || '',
       };
-      saveProfileForEmail(account.email, prof).catch(() => {});
       // CLOUD: always write the full profile to the backend so it survives
       // logout / uninstall. This is the authoritative copy now.
       cloudSaveProfile(account.email, prof.fullName, prof.profilePicture, {
@@ -1128,11 +1172,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
   // ---------- Q&A Handlers ----------
 
-  const handleAskQuestion = async () => {
-    if (!newQuestion.trim()) return;
+    const handleAskQuestion = async () => {
+    const trimmed = newQuestion.trim();
+    if (!trimmed) return;
 
     const questionId = Date.now();
-    const askedText = newQuestion.trim();
+        const askedText = trimmed;
     const newQ = {
       id: questionId,
       question: askedText,
@@ -1174,6 +1219,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
   };
 
   const handleLikeQuestion = (questionId) => {
+    // Capture previous state for rollback on failure
+    const prevQuestion = qAndA.find(q => sameId(q.id, questionId));
+    if (!prevQuestion) return;
+
+    // Optimistic update
     setQAndA(prev => prev.map(q => {
       if (sameId(q.id, questionId)) {
         return {
@@ -1184,6 +1234,23 @@ const [profileDirectory, setProfileDirectory] = useState({});
       }
       return q;
     }));
+
+    // Notify backend if this is a server-synced question and we're liking (not unliking)
+    if (!prevQuestion.likedByMe && prevQuestion.serverPostId && account.email) {
+      notifyBackendLike(prevQuestion.serverPostId, null, account.email).catch(() => {
+        // Rollback on failure
+        setQAndA(prev => prev.map(q => {
+          if (sameId(q.id, questionId)) {
+            return {
+              ...q,
+              likes: q.likedByMe ? q.likes - 1 : q.likes + 1,
+              likedByMe: !q.likedByMe,
+            };
+          }
+          return q;
+        }));
+      });
+    }
   };
 
   const handleLikeAnswer = (questionId, answerId) => {
@@ -1192,6 +1259,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
     const likedAnswer = likedQuestion?.answers.find(a => sameId(a.id, answerId));
     const willLike = !!likedAnswer && !likedAnswer.likedByMe;
 
+    // Optimistic update
     setQAndA(prev => prev.map(q => {
       if (sameId(q.id, questionId)) {
         return {
@@ -1218,7 +1286,27 @@ const [profileDirectory, setProfileDirectory] = useState({});
         likedQuestion.serverPostId,
         likedAnswer.serverContribId,
         account.email || 'guest'
-      ).catch(() => {});
+      ).catch(() => {
+        // Rollback optimistic update on failure
+        setQAndA(prev => prev.map(q => {
+          if (sameId(q.id, questionId)) {
+            return {
+              ...q,
+              answers: q.answers.map(a => {
+                if (sameId(a.id, answerId)) {
+                  return {
+                    ...a,
+                    likes: a.likedByMe ? a.likes - 1 : a.likes + 1,
+                    likedByMe: !a.likedByMe,
+                  };
+                }
+                return a;
+              }),
+            };
+          }
+          return q;
+        }));
+      });
     }
   };
 
@@ -1241,9 +1329,10 @@ const [profileDirectory, setProfileDirectory] = useState({});
     }
   };
 
-  // AI: generate an answer for a Q&A question with Firebase AI Logic (Gemini)
-  // directly on the device. No backend round-trip: the old server proxy
-  // (Render + GEMINI_API_KEY) was the reason answers kept failing.
+  // AI: generate an answer for a Q&A question from free keyless web search
+  // (Wikipedia + DuckDuckGo) directly on the device. No backend round-trip
+  // and no generative-AI quota: the old Gemini pipeline was retired when its
+  // free-tier tokens ran out; the backend search path remains as a fallback.
   // questionTextOverride lets the auto-answer flow pass the freshly typed
   // question (state has not re-rendered yet when posting).
   const handleAIAnswer = async (questionId, questionTextOverride) => {
@@ -1258,16 +1347,26 @@ const [profileDirectory, setProfileDirectory] = useState({});
     setQAndA(prev => prev.map(q => sameId(q.id, questionId) ? { ...q, aiAnswerLoading: true, aiError: undefined } : q));
 
     try {
-      // Firebase AI Logic (Gemini Developer API backend — free Spark plan).
+      // Free keyless web search (Wikipedia + DuckDuckGo), with the backend's
+      // own search pipeline as a secondary fallback path.
       const data = await getAIAnswer(localQuestion, language);
 
       const aiAnswer = {
         id: Date.now(),
         user: {
-          name: language === 'tr' ? 'İslamı öğreniyorum AI' : 'I am Learning Islam AI',
-          avatar: '🤖',
+          name:
+            data.provider === 'google-search'
+              ? language === 'tr'
+                ? 'İslamı öğreniyorum Web Arama'
+                : 'I am Learning Islam Web Search'
+              : language === 'tr'
+                ? 'İslamı öğreniyorum AI'
+                : 'I am Learning Islam AI',
+          avatar: data.provider === 'google-search' ? '🔎' : '🤖',
         },
         text: data.answer,
+        // Structured links shown under the answer (web-search fallback only).
+        sources: Array.isArray(data.sources) ? data.sources : [],
         timestamp: language === 'tr' ? 'şimdi' : 'just now',
         likes: 0,
         likedByMe: false,
@@ -1375,7 +1474,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
     !!ownerEmail && !!account.email && ownerEmail === account.email;
 
   // --- Q&A ---
-  const handleEditQuestion = (questionId, newText) => {
+    const handleEditQuestion = (questionId, newText) => {
     const text = (newText || '').trim();
     if (!text) return;
     setQAndA(prev => prev.map(q => (
@@ -1383,6 +1482,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
         ? { ...q, question: text }
         : q
     )));
+    // Sync the edit to the backend (best-effort). Only server-synced questions
+    // can be edited on the server; local-only edits stay local.
+    const target = qAndA.find(q => sameId(q.id, questionId) && isOwnContent(q.ownerEmail));
+    if (target && target.serverPostId && account.email) {
+      cloudUpdateQuestion(target.serverPostId, target.ownerEmail, text).catch(() => {});
+    }
   };
 
   const handleDeleteQuestion = (questionId) => {
@@ -1414,9 +1519,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
     );
   };
 
-  const handleEditAnswer = (questionId, answerId, newText) => {
+    const handleEditAnswer = (questionId, answerId, newText) => {
     const text = (newText || '').trim();
     if (!text) return;
+    const question = qAndA.find(q => sameId(q.id, questionId));
+    const answer = question?.answers.find(a => sameId(a.id, answerId));
     setQAndA(prev => prev.map(q => (
       sameId(q.id, questionId)
         ? {
@@ -1427,6 +1534,15 @@ const [profileDirectory, setProfileDirectory] = useState({});
           }
         : q
     )));
+    // Sync the edit to the backend (best-effort).
+    if (answer && answer.serverContribId && question?.serverPostId && account.email) {
+      cloudUpdateAnswer(
+        question.serverPostId,
+        answer.serverContribId,
+        answer.ownerEmail,
+        text
+      ).catch(() => {});
+    }
   };
 
   // Answers delete immediately (no confirmation) but permanently: server-synced
@@ -1451,13 +1567,18 @@ const [profileDirectory, setProfileDirectory] = useState({});
     )));
   };
 
-  // --- Community ---
+    // --- Community ---
   const handleEditPost = (postId, newText) => {
     const text = (newText || '').trim();
     if (!text) return;
+    const post = communityPosts.find(p => sameId(p.id, postId) && isOwnContent(p.ownerEmail));
     setCommunityPosts(prev => prev.map(p => (
       sameId(p.id, postId) && isOwnContent(p.ownerEmail) ? { ...p, text } : p
     )));
+    // Sync the edit to the backend (best-effort).
+    if (post && post.serverId && post.ownerEmail && account.email) {
+      cloudUpdatePost(post.serverId, post.ownerEmail, text).catch(() => {});
+    }
   };
 
   const handleDeletePost = (postId) => {
@@ -1488,9 +1609,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
     );
   };
 
-  const handleEditComment = (postId, commentId, newText) => {
+    const handleEditComment = (postId, commentId, newText) => {
     const text = (newText || '').trim();
     if (!text) return;
+    const post = communityPosts.find(p => sameId(p.id, postId));
+    const comment = post?.comments.find(c => sameId(c.id, commentId) && isOwnContent(c.commenterEmail));
     setCommunityPosts(prev => prev.map(p => (
       sameId(p.id, postId)
         ? {
@@ -1501,6 +1624,10 @@ const [profileDirectory, setProfileDirectory] = useState({});
           }
         : p
     )));
+    // Sync the edit to the backend (best-effort).
+    if (comment && post?.serverId && comment.serverId && comment.commenterEmail && account.email) {
+      cloudUpdateComment(post.serverId, comment.serverId, comment.commenterEmail, text).catch(() => {});
+    }
   };
 
   // Comments delete immediately (no confirmation) but permanently: server-synced
@@ -1804,6 +1931,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
       // everyone else and break for the author too once Android clears the
       // picker's cache directory.
       let permanentMedia = null;
+      let mediaFailed = false;
       if (media?.uri) {
         try {
           const url = await withTimeout(
@@ -1817,14 +1945,30 @@ const [profileDirectory, setProfileDirectory] = useState({});
             throw new Error('timed out');
           }
         } catch (error) {
+          mediaFailed = true;
           console.warn(
-            'Media upload failed — post will be shared without permanent media:',
+            'Media upload failed — post will be shared without media:',
             error?.message || error
           );
-          // Keep the local file so the author still sees their own preview;
-          // other devices simply won't get the media for this post.
-          permanentMedia = media;
+          // Do NOT keep the local file:// path: it is invisible to every other
+          // user and breaks for the author too once Android clears the picker
+          // cache. The post goes out text-only instead (see below).
+          permanentMedia = null;
         }
+      }
+
+      // Media-only post whose upload failed -> sharing an empty post would be
+      // confusing junk. Abort instead so the user can retry. Runs before any
+      // state change; setSharingPost(false) happens in the finally block.
+      if (mediaFailed && !newPostText.trim()) {
+        Alert.alert(
+          language === 'tr' ? 'Medya yüklenemedi' : 'Media upload failed',
+          language === 'tr'
+            ? 'Medya yüklenemediği için gönderi paylaşılamadı. Lütfen tekrar deneyin.'
+            : 'Your media could not be uploaded, so the post was not shared. Please try again.',
+          [{ text: language === 'tr' ? 'Tamam' : 'OK' }]
+        );
+        return;
       }
 
       const newPost = {
@@ -1871,11 +2015,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
     }
   };
 
-  const handleLikePost = (postId) => {
+    const handleLikePost = (postId) => {
     // Read current state before toggling so we only notify on a fresh like.
     const targetPost = communityPosts.find(p => sameId(p.id, postId));
     const willLike = !!targetPost && !targetPost.likedByMe;
 
+    // Optimistic update
     setCommunityPosts(prevPosts => prevPosts.map(p => {
       if (sameId(p.id, postId)) {
         return {
@@ -1895,16 +2040,29 @@ const [profileDirectory, setProfileDirectory] = useState({});
       targetPost.ownerEmail !== account.email
     ) {
       notifyBackendCommunityPostLike(postId, account.email, account.fullName)
-        .catch(() => {});
+        .catch(() => {
+          // Rollback optimistic update on failure
+          setCommunityPosts(prevPosts => prevPosts.map(p => {
+            if (sameId(p.id, postId)) {
+              return {
+                ...p,
+                likes: p.likedByMe ? p.likes - 1 : p.likes + 1,
+                likedByMe: !p.likedByMe,
+              };
+            }
+            return p;
+          }));
+        });
     }
   };
 
-  const handleLikeComment = (postId, commentId) => {
+    const handleLikeComment = (postId, commentId) => {
     // Read current state before toggling so we only notify on a fresh like.
     const parentPost = communityPosts.find(p => sameId(p.id, postId));
     const targetComment = parentPost?.comments.find(c => sameId(c.id, commentId));
     const willLike = !!targetComment && !targetComment.likedByMe;
 
+    // Optimistic update
     setCommunityPosts(prevPosts => prevPosts.map(p => {
       if (sameId(p.id, postId)) {
         return {
@@ -1932,7 +2090,27 @@ const [profileDirectory, setProfileDirectory] = useState({});
       targetComment.commenterEmail !== account.email
     ) {
       notifyBackendCommunityCommentLike(postId, commentId, account.email, account.fullName)
-        .catch(() => {});
+        .catch(() => {
+          // Rollback optimistic update on failure
+          setCommunityPosts(prevPosts => prevPosts.map(p => {
+            if (sameId(p.id, postId)) {
+              return {
+                ...p,
+                comments: p.comments.map(c => {
+                  if (sameId(c.id, commentId)) {
+                    return {
+                      ...c,
+                      likes: c.likedByMe ? c.likes - 1 : c.likes + 1,
+                      likedByMe: !c.likedByMe,
+                    };
+                  }
+                  return c;
+                }),
+              };
+            }
+            return p;
+          }));
+        });
     }
   };
 
@@ -1998,7 +2176,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
       <View style={[styles.container, { backgroundColor: palette.shell }]}>
         <View style={styles.topSection}>
           <View>
-            <Text style={styles.smallLabel}>{t.muslimLife}</Text>
+            <Text style={styles.smallLabel}>{t?.muslimLife || 'Muslim Life'}</Text>
             <Text style={styles.mainTitle}>İslamı öğreniyorum</Text>
           </View>
 
@@ -2014,7 +2192,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
         <View style={styles.tabRow}>
           {[
-            { key: 'prayer', label: t.prayer },
+            { key: 'prayer', label: t?.prayer || 'Prayer' },
             { key: 'qa', label: t?.qna || 'Q&A' },
             { key: 'news', label: t?.news || 'News' },
             { key: 'community', label: t?.community || 'Community' },
@@ -2088,7 +2266,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
             onRefresh={handleManualRefresh}
           />
         )}
-        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} saveAccount={saveAccount} isGoogleUser={isGoogleUser} setSignedIn={setSignedIn} profilePicture={profilePicture} setProfilePicture={setProfilePicture} />}
+        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} isGoogleUser={isGoogleUser} setIsGoogleUser={setIsGoogleUser} setSignedIn={setSignedIn} profilePicture={profilePicture} setProfilePicture={setProfilePicture} setOccupation={setOccupation} setAddress={setAddress} setBio={setBio} />}
       </View>
     </SafeAreaView>
   );

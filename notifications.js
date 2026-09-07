@@ -1,22 +1,30 @@
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { API_URL, SECURITY_CONFIG } from './config.js';
 import { getSecurityHeaders, checkRateLimit, validatePinningConfig } from './security.js';
 import { getCurrentFirebaseUser } from './firebaseAuth.js';
 
-// Configure how notifications are presented while the app is in the foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    // SDK 53: shouldShowAlert is the legacy flag kept for compatibility;
-    // banner/list flags are the modern equivalents with identical meaning.
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+// Configure how notifications are presented while the app is in the foreground.
+// Wrapped in try/catch because setNotificationHandler can throw on platforms
+// where expo-notifications isn't fully initialized at module-load time, and a
+// throw here would crash the entire app during import (before any component
+// renders).
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      // SDK 53: shouldShowAlert is the legacy flag kept for compatibility;
+      // banner/list flags are the modern equivalents with identical meaning.
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+} catch (error) {
+  console.warn('setNotificationHandler failed:', error?.message || error);
+}
 
 // ---------------------------------------------------------------------------
 // Sound modes
@@ -197,10 +205,33 @@ export async function secureFetch(url, options = {}) {
 }
 
 /**
- * Request notification permissions from the user.
+ * Request notification permission from the user.
+ *
+ * On Android 13+ (API 33+) the runtime `POST_NOTIFICATIONS` permission must be
+ * requested explicitly, otherwise notifications silently never appear (the
+ * OS reports "granted" only after the user opts in through the dialog). We
+ * therefore ask via React Native's PermissionsAndroid FIRST — that surfaces
+ * the system dialog reliably on every device — and fall back to
+ * expo-notifications' own request flow for iOS / older Android.
+ *
  * @returns {Promise<boolean>} true if permission was granted
  */
 export async function requestNotificationPermissions() {
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    try {
+      const result = await PermissionsAndroid.request(
+        'android.permission.POST_NOTIFICATIONS'
+      );
+      if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
+      // "never_ask_again" / denied — log the reason and fall through to
+      // the expo flow below which can still open the system settings page.
+      console.warn('POST_NOTIFICATIONS request result:', result);
+    } catch (e) {
+      console.warn('PermissionsAndroid.request failed:', e?.message || e);
+    }
+  }
+  const settings = await Notifications.getPermissionsAsync();
+  if (settings?.granted) return true;
   const { status } = await Notifications.requestPermissionsAsync();
   return status === 'granted';
 }
@@ -459,7 +490,13 @@ export async function setupNotificationChannel() {
  */
 export async function getExpoPushToken() {
   try {
-    const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+        // In SDK 53, expo-constants exposes the EAS project ID under
+    // Constants.expoConfig.extra.eas.projectId. The old `Constants.easConfig`
+    // path does not exist in this SDK version and would always be undefined.
+    const projectId =
+      Constants?.expoConfig?.extra?.eas?.projectId ??
+      Constants?.manifest?.extra?.eas?.projectId ??
+      Constants?.easConfig?.projectId;
     if (!projectId) {
       console.log('No EAS projectId configured - skipping push token registration');
       return null;
@@ -926,6 +963,49 @@ export async function updateServerUser(currentEmail, patch) {
     return response.ok;
   } catch (error) {
     console.warn('updateServerUser failed', error.message);
+    return false;
+  }
+}
+
+/**
+ * DELETE /api/users/:email — permanently delete a user account and all
+ * associated data.
+ *
+ * @param {string} email
+ * @param {object} [opts]
+ * @param {boolean} [opts.strict=false]
+ *   false (default): legacy behaviour — resolve false on any failure.
+ *   true: THROW on network/server failure instead of swallowing it. Used by
+ *   the account-deletion flow, which must know whether server-side data was
+ *   really wiped before deleting the Firebase Auth account (otherwise the
+ *   backend record could outlive the auth user with no owner able to sign in
+ *   and remove it).
+ * @returns {Promise<boolean>} true when the server confirmed deletion.
+ */
+export async function deleteServerUser(email, { strict = false } = {}) {
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(await authHeaders()),
+    };
+    const response = await secureFetch(`${API_URL}/api/users/${encodeURIComponent(String(email).trim().toLowerCase())}`, {
+      method: 'DELETE',
+      headers,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      // 404 = the backend has no record for this user: there is nothing left
+      // to delete, which for the deletion flow is a success condition.
+      if (response.status === 404) {
+        return true;
+      }
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    return !!(data && data.success);
+  } catch (error) {
+    if (strict) throw error;
+    console.warn('deleteServerUser failed', error.message);
     return false;
   }
 }

@@ -21,7 +21,6 @@
  */
 
 import { API_URL } from './config.js';
-import { getSecurityHeaders } from './security.js';
 import { getCurrentFirebaseUser } from './firebaseAuth.js';
 
 /**
@@ -43,11 +42,11 @@ async function authHeaders() {
   return {};
 }
 
-async function cloudFetch(path, { method = 'GET', body } = {}) {
+async function cloudFetch(path, options = {}) {
+  const { method = 'GET', body } = options;
   const headers = {
     'Content-Type': 'application/json',
     ...(await authHeaders()),
-    ...(typeof getSecurityHeaders === 'function' ? (await getSecurityHeaders()) : {}),
   };
   const response = await fetch(`${API_URL}${path}`, {
     method,
@@ -197,6 +196,88 @@ export async function cloudFetchCommunityFeed(limit = 50) {
 // ---------------------------------------------------------------------------
 // Profile directory
 // ---------------------------------------------------------------------------
+
+/**
+ * Update a question (Q&A) on the server.
+ * @param {string|number} serverPostId - server-side ID of the question
+ * @param {string} ownerEmail - email of the question owner
+ * @param {string} text - updated question text
+ * @returns {Promise<boolean>} true if the update succeeded
+ */
+export async function cloudUpdateQuestion(serverPostId, ownerEmail, text) {
+  try {
+    const response = await cloudFetch(`/api/posts/${encodeURIComponent(serverPostId)}`, {
+      method: 'PUT',
+      body: { userId: ownerEmail, question: text },
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('cloudUpdateQuestion failed:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Update an answer (Q&A contribution) on the server.
+ * @param {string|number} serverPostId - server-side ID of the question
+ * @param {string|number} serverContribId - server-side ID of the contribution
+ * @param {string} ownerEmail - email of the answer owner
+ * @param {string} text - updated answer text
+ * @returns {Promise<boolean>} true if the update succeeded
+ */
+export async function cloudUpdateAnswer(serverPostId, serverContribId, ownerEmail, text) {
+  try {
+    const response = await cloudFetch(
+      `/api/posts/${encodeURIComponent(serverPostId)}/contributions/${encodeURIComponent(serverContribId)}`,
+      { method: 'PUT', body: { userId: ownerEmail, text } }
+    );
+    return response.ok;
+  } catch (error) {
+    console.warn('cloudUpdateAnswer failed:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Update a community post on the server.
+ * @param {string|number} serverId - server-side ID of the post
+ * @param {string} ownerEmail - email of the post owner
+ * @param {string} text - updated post text
+ * @returns {Promise<boolean>} true if the update succeeded
+ */
+export async function cloudUpdatePost(serverId, ownerEmail, text) {
+  try {
+    const response = await cloudFetch(`/api/community/posts/${encodeURIComponent(serverId)}`, {
+      method: 'PUT',
+      body: { userId: ownerEmail, text },
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('cloudUpdatePost failed:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Update a community comment on the server.
+ * @param {string|number} serverId - server-side ID of the parent post
+ * @param {string|number} serverCommentId - server-side ID of the comment
+ * @param {string} commenterEmail - email of the comment owner
+ * @param {string} text - updated comment text
+ * @returns {Promise<boolean>} true if the update succeeded
+ */
+export async function cloudUpdateComment(serverId, serverCommentId, commenterEmail, text) {
+  try {
+    const response = await cloudFetch(
+      `/api/community/posts/${encodeURIComponent(serverId)}/comments/${encodeURIComponent(serverCommentId)}`,
+      { method: 'PUT', body: { userId: commenterEmail, text } }
+    );
+    return response.ok;
+  } catch (error) {
+    console.warn('cloudUpdateComment failed:', error.message);
+    return false;
+  }
+}
 
 export async function cloudUpdateDirectoryEntry(email, entry) {
   try {

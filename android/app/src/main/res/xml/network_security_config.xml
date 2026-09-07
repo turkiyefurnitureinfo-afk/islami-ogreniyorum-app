@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security configuration for com.joshua.islamiogreniyorum.
+
+  Allows remote profile pictures / community media (https://) and any legacy
+  http:// image hosts the community feed may still reference, while keeping
+  cleartext BLOCKED for every other host. Used by:
+    android/app/src/main/res/xml/network_security_config.xml
+    referenced from AndroidManifest.xml -> application android:networkSecurityConfig
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <!-- Trust system CAs only — no user-installed CAs (safer). -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

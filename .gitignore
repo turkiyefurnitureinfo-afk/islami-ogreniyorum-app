@@ -11,6 +11,8 @@ server/serviceAccountKey.json
 # Android upload keystore (NEVER commit this)
 *.jks
 @*.jks
+# Keystore passwords fetched from EAS by scripts/fetch-keystore.js (NEVER commit)
+android/eas-credentials.properties
 
 # Environment / secret files (NEVER commit these)
 .env
@@ -25,6 +27,8 @@ dist/
 server/build-log.txt
 *.apk
 server/*.log
+# User-uploaded media (served by the backend, never committed)
+uploads/
 
 # Native project IS committed (bare workflow). EAS builds the committed
 # android/ Gradle project directly (no cloud prebuild) — this is the exact
@@ -36,6 +40,10 @@ server/*.log
 *.bak
 render.yaml.bak
 server/t-out.txt
+# Temporary debug/test scripts and artifacts (e.g. .tmp-upload-test.js)
+.tmp*
+*.tmp
+tmp-*
 
 # EAS build log captures (debugging artifacts)
 .easlogs/

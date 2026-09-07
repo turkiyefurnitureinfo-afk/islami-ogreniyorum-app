@@ -105,24 +105,25 @@ async function resolveVerifiedIdentity(req) {
 
   const rawAuth = req.headers['authorization'] || '';
   const token = String(rawAuth).replace(/^Bearer\s+/i, '').trim();
-  if (!token) return { status: 'unverified', email: clientUserId || '' };
+  if (!token) return { status: 'unverified', email: clientUserId || '', uid: null };
 
   const authn = initVerify();
   if (!authn) {
     // No Firebase on this host -> cannot verify; treat the token as unverifiable
     // and keep the legacy behaviour (do NOT hard-fail: offline dev must work).
-    return { status: 'unverified', email: clientUserId || '' };
+    return { status: 'unverified', email: clientUserId || '', uid: null };
   }
 
   try {
     const decoded = await authn.verifyIdToken(token);
     const email = (decoded.email || clientUserId || '').trim().toLowerCase();
-    return { status: 'ok', email };
+    const uid = decoded.uid || null;
+    return { status: 'verified', email, uid };
   } catch (error) {
     // Token present but invalid/expired -> refuse, never fall back to client input.
     const e = error;
     console.warn('[verify] rejected bad token:', (e && e.message) || e);
-    return { status: 'rejected', email: '' };
+    return { status: 'rejected', email: '', uid: null };
   }
 }
 

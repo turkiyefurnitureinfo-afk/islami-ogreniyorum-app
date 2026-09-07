@@ -35,7 +35,7 @@ expoAutolinking.useExpoModules()
 // the project identifier during remote builds (EAS) and non-ASCII values can
 // corrupt the build state in headless environments. The human-readable app
 // name lives in app.json and android/app/src/main/res/values/strings.xml.
-rootProject.name = 'islamiogreniyorum'
+rootProject.name = 'İslamı öğreniyorum'
 
 expoAutolinking.useExpoVersionCatalog()
 

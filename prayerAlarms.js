@@ -21,7 +21,7 @@
 // catch-up rings without touching the other prayers.
 // ---------------------------------------------------------------------------
 
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { HIGH_ALARM_SOUND } from './notifications.js';
 
@@ -121,28 +121,51 @@ export function buildAlarmContent({ prayerLabel, language, isCatchUp, chainId })
 }
 
 /**
- * Best-effort: on Android 12+ (API 31+) request the "Alarm & reminders"
- * capability so expo-notifications' exact/Date+Daily triggers actually fire on time.
+ * Google Play policy compliance for exact alarms (SCHEDULE_EXACT_ALARM).
  *
- * Declaring `SCHEDULE_EXACT_ALARM` in the manifest is not enough: on Android 14
- * (and on many OEM ROМs) it is a runtime app-operation that the user must grant,
- * otherwise the system may silently defer/in-exact the scheduled alarm. This call asks
- * once when an alarm is configured; if the user declines, scheduling still proceeds
- * (the OS will just fire it inexactly, exactly the previous behavior — no regression).
+ * Play restricts exact alarms to apps whose core functionality needs them;
+ * the permission is also a user-grantable "Alarms & reminders" app-op on
+ * Android 12-14. This helper therefore:
+ *   1. NEVER blocks scheduling — it only attempts the request and reports.
+ *   2. Never uses a raw PermissionsAndroid.request() for the app-op (that
+ *      is the pattern Play flags); expo-notifications' dedicated request is
+ *      used when the installed version exposes it.
+ *   3. Returns false on denial so the caller can log a graceful downgrade.
+ *
+ * The actual crash-safety comes from expo-notifications itself: its native
+ * ExpoSchedulingDelegate checks AlarmManager.canScheduleExactAlarms() and
+ * silently switches to inexact setAndAllowWhileIdle() when the capability
+ * is denied — so a denial degrades timing accuracy slightly instead of
+ * throwing or preventing alarms entirely.
+ *
+ * @returns {Promise<boolean>} true when exact alarms are available (or the
+ *   platform does not need the app-op), false when the user/OS denied them.
  */
 async function ensureExactAlarmPermission() {
   try {
-    if (Platform.OS === 'android' && Platform.Version >= 31) {
-      const granted = await PermissionsAndroid.request(
-        'android.permission.SCHEDULE_EXACT_ALARM'
+    if (Platform.OS !== 'android' || Platform.Version < 31) return true;
+
+    // Preferred: expo-notifications' dedicated exact-alarm request (SDK 52+).
+    if (
+      typeof Notifications.requestExactAlarmsPermissionAsync === 'function'
+    ) {
+      const status = await Notifications.requestExactAlarmsPermissionAsync();
+      if (status === 'granted') return true;
+      console.warn(
+        'Exact-alarm permission not granted — prayer alarms will use inexact scheduling.'
       );
-      if (!granted) {
-        console.warn('Exact-alarm permission not granted — prayer alarms may be inexact.');
-      }
+      return false;
     }
+
+    // expo-notifications < SDK 52 has no dedicated JS API. The native
+    // delegate performs the canScheduleExactAlarms() check itself and falls
+    // back to inexact alarms automatically, so no manual permission call is
+    // needed (and none should be made — see the Play policy note above).
+    return true;
   } catch (e) {
     // Best-effort only; never let a permission hiccup break scheduling.
-
+    console.warn('ensureExactAlarmPermission failed:', e?.message || e);
+    return false;
   }
 }
 
@@ -186,76 +209,100 @@ async function armNativeAlarm(tsEpochMs, chainId, label, language) {
 export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t }) {
   if (Platform.OS !== 'android') return 0;
 
-  // Ask for the exact-alarm app-op so alarm rings on time on Android 12+.
-  await ensureExactAlarmPermission();
-
   // Channels must exist BEFORE scheduling or Android falls back to defaults.
   await setupAlarmChannel();
 
-  // Wipe everything previously scheduled (old alarms + legacy schedules).
-  await Notifications.cancelAllScheduledNotificationsAsync();
-
-  const config = sanitizePrayerAlarms(alarms);
-  let scheduled = 0;
-
-  for (const key of ALARM_PRAYERS) {
-    const entry = config[key];
-    if (!entry || !entry.enabled) continue;
-    const fireMinutes = alarmFireMinutes(prayerTimes, key, entry.offsetMinutes);
-    if (fireMinutes == null) continue;
-
-    const hour = Math.floor(fireMinutes / 60);
-    const minute = Math.floor(fireMinutes % 60);
-    const label = (t && t[key]) || key;
-
-    // 1) DAILY repeating trigger — the alarm fires every day at its time,
-    //    forever, with no rescheduling (this is what makes it robust).
-    await Notifications.scheduleNotificationAsync({
-      content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: false, chainId: `daily-${key}` }),
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour,
-        minute,
-      },
-    });
-    scheduled += 1;
-
-    // 2) Catch-up rings for the NEXT occurrence only: when the user does not
-    //    dismiss the alarm it rings again every 5 minutes (capped at 30 min).
-    //    Tapping any ring cancels the rest of that occurrence's chain.
-    //    (Only the next occurrence is pre-scheduled — Android caps pending
-    //    notifications at 64; the daily trigger above covers every later day,
-    //    and the app reschedules catch-ups whenever it is opened / times
-    //    change.)
-    const now = Date.now();
-    let nextFire = null;
-    for (let dayOffset = 0; dayOffset <= 1 && !nextFire; dayOffset++) {
-      const fire = new Date();
-      fire.setDate(fire.getDate() + dayOffset);
-      fire.setHours(hour, minute, 0, 0);
-      if (fire.getTime() > now) nextFire = fire;
-    }
-    if (nextFire) {
-      const chainId = `${key}-${nextFire.getTime()}`;
-      const reminderCount = Math.floor(RING_WINDOW_MIN / RING_AGAIN_INTERVAL_MIN);
-      for (let r = 1; r <= reminderCount; r++) {
-        const at = new Date(nextFire.getTime() + r * RING_AGAIN_INTERVAL_MIN * 60000);
-        await Notifications.scheduleNotificationAsync({
-          content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: true, chainId }),
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
-        });
-        scheduled += 1;
-      }
-// Optional native AlarmManager.setAlarmClock for the NEXT occurrence (guaranteed
-      // full-screen + exact + Doze-exempt). Falls back harmlessly if not built in / throws.
-      await armNativeAlarm(
-        nextFire.getTime(),
-        `native-${key}-${nextFire.getTime()}`,
-        label
-      );
-    }
+  // Ask for the exact-alarm app-op. When the user or the OS denies it, this
+  // only affects timing accuracy: expo-notifications' native scheduling
+  // delegate re-checks AlarmManager.canScheduleExactAlarms() per trigger and
+  // automatically downgrades to inexact setAndAllowWhileIdle(), so denial can
+  // never crash scheduling or prevent notifications from firing.
+  const exactGranted = await ensureExactAlarmPermission();
+  if (!exactGranted) {
+    console.info(
+      'Prayer alarms scheduled WITHOUT exact-alarm capability — rings may be ' +
+        'delayed by a few minutes under Doze. All triggers remain active.'
+    );
   }
-  return scheduled;
+
+  try {
+    // Wipe everything previously scheduled (old alarms + legacy schedules).
+    await Notifications.cancelAllScheduledNotificationsAsync();
+
+    const config = sanitizePrayerAlarms(alarms);
+    let scheduled = 0;
+
+    for (const key of ALARM_PRAYERS) {
+      const entry = config[key];
+      if (!entry || !entry.enabled) continue;
+      const fireMinutes = alarmFireMinutes(prayerTimes, key, entry.offsetMinutes);
+      if (fireMinutes == null) continue;
+
+      const hour = Math.floor(fireMinutes / 60);
+      const minute = Math.floor(fireMinutes % 60);
+      const label = (t && t[key]) || key;
+
+      // 1) DAILY repeating trigger — the alarm fires every day at its time,
+      //    forever, with no rescheduling (this is what makes it robust).
+      await Notifications.scheduleNotificationAsync({
+        content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: false, chainId: `daily-${key}` }),
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          hour,
+          minute,
+        },
+      });
+      scheduled += 1;
+
+      // 2) Catch-up rings for the NEXT occurrence only: when the user does not
+      //    dismiss the alarm it rings again every 5 minutes (capped at 30 min).
+      //    Tapping any ring cancels the rest of that occurrence's chain.
+      //    (Only the next occurrence is pre-scheduled — Android caps pending
+      //    notifications at 64; the daily trigger above covers every later day,
+      //    and the app reschedules catch-ups whenever it is opened / times
+      //    change.)
+      const now = Date.now();
+      let nextFire = null;
+      for (let dayOffset = 0; dayOffset <= 1 && !nextFire; dayOffset++) {
+        const fire = new Date();
+        fire.setDate(fire.getDate() + dayOffset);
+        fire.setHours(hour, minute, 0, 0);
+        if (fire.getTime() > now) nextFire = fire;
+      }
+      if (nextFire) {
+        const chainId = `${key}-${nextFire.getTime()}`;
+        // Cap catch-up rings so total pending notifications never exceeds the
+        // platform limit (iOS allows 64, Android 50). Daily triggers use 5 slots;
+        // reserve room for catch-ups: floor((64 - 5) / 5) = 11 per prayer.
+        const maxCatchUps = Math.min(
+          Math.floor(RING_WINDOW_MIN / RING_AGAIN_INTERVAL_MIN),
+          6 // 30 min / 5 min = 6 catch-ups per prayer occurrence
+        );
+        for (let r = 1; r <= maxCatchUps; r++) {
+          const at = new Date(nextFire.getTime() + r * RING_AGAIN_INTERVAL_MIN * 60000);
+          await Notifications.scheduleNotificationAsync({
+            content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: true, chainId }),
+            trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
+          });
+          scheduled += 1;
+        }
+        // Optional native AlarmManager.setAlarmClock for the NEXT occurrence (guaranteed
+        // full-screen + exact + Doze-exempt). Falls back harmlessly if not built in / throws.
+        await armNativeAlarm(
+          nextFire.getTime(),
+          `native-${key}-${nextFire.getTime()}`,
+          label
+        );
+      }
+    }
+    return scheduled;
+  } catch (error) {
+    // Scheduling is a background convenience — it must NEVER crash the app
+    // (e.g. on launch). Whatever was scheduled before the failure remains
+    // active; the app re-syncs alarms on the next launch/settings change.
+    console.error('schedulePrayerAlarms failed:', error?.message || error);
+    return -1;
+  }
 }
 
 /**

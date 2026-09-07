@@ -1,5 +1,16 @@
 import * as AuthSession from 'expo-auth-session';
 import { Platform } from 'react-native';
+
+// Native Google Sign-In (used on Android). The browser-based expo-auth-session
+// flow below is kept ONLY as a fallback for web / Expo Go, because Google now
+// blocks custom-scheme browser redirects for Android OAuth clients with
+// "Error 400: invalid_request" (OAuth policy: secure response handling).
+// The native module exchanges the Google ID token for a Firebase session
+// instead — no custom-scheme redirect is involved, so it is not affected.
+import {
+  GoogleSignin,
+  statusCodes,
+} from '@react-native-google-signin/google-signin';
 import {
   GOOGLE_ANDROID_CLIENT_ID,
   GOOGLE_ANDROID_CLIENT_ID_EAS,
@@ -45,7 +56,11 @@ import {
 //     "Testing" status -- add the Gmail address under "Test users".
 // ============================================================
 
-const GOOGLE_IOS_CLIENT_ID = '';
+// iOS uses the native @react-native-google-signin/google-signin module which
+// is configured with the WEB client ID of the Firebase project. A separate
+// iOS OAuth client is not required (the native module signs in with the
+// Google ID token and exchanges it for a Firebase session). Kept for clarity.
+const GOOGLE_IOS_CLIENT_ID = GOOGLE_WEB_CLIENT_ID;
 
 // Google OAuth endpoints
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -131,10 +146,13 @@ function describeGoogleFailure(result, language = 'tr') {
   if (language === 'tr') {
     if (text.includes('access_denied') || text.includes('blocked')) {
       return (
-        'Google bu hesabı engelledi. OAuth onay ekranı "Testing" durumundayken, ' +
-        'Gmail adresinizin Google Cloud Console (APIs & Services → OAuth consent ' +
-        'screen) içinde "Test users" (Test kullanıcıları) listesine eklenmiş ' +
-        'olması gerekir.'
+        'Google girişi engellendi — OAuth onay ekranı henüz yayınlanmadı. Düzeltmek için ' +
+        'Google Cloud Console → APIs & Services → OAuth consent screen (Google Auth Platform → Audience) ' +
+        'bölümüne gidin ve şunlardan birini yapın: (1) "PUBLISH APP" ile uygulamayı ' +
+        '"In production" durumuna alın (yalnızca temel profil/e-posta izni istendiği için ' +
+        'doğrulama gerekmez), VEYA (2) "Testing" durumunda kalacaksa test yapacak her Gmail ' +
+        'adresini "Test users" listesine ekleyin. Uygulama adı, destek e-postası, gizlilik ' +
+        'politikası bağlantısı ve ana sayfa bağlantısının da onay ekranı ayarlarında doldurulmuş olması gerekir.'
       );
     }
     if (text.includes('invalid_request') || text.includes('invalid_client')) {
@@ -151,9 +169,13 @@ function describeGoogleFailure(result, language = 'tr') {
   }
   if (text.includes('access_denied') || text.includes('blocked')) {
     return (
-      'Google blocked this account. While the OAuth consent screen is in ' +
-      '"Testing" status, your Gmail address must be listed under "Test users" ' +
-      'in Google Cloud Console (APIs & Services -> OAuth consent screen).'
+      'Google sign-in is blocked — the OAuth consent screen is not published yet. To fix it, ' +
+      'go to Google Cloud Console → APIs & Services → OAuth consent screen (Google Auth Platform → Audience) ' +
+      'and do ONE of the following: (1) Click "PUBLISH APP" to move the app to "In production" ' +
+      '(no verification is required since only basic profile/email scopes are requested), OR ' +
+      '(2) keep it in "Testing" and add every Gmail address that should be able to sign in to ' +
+      'the "Test users" list. Also make sure the app name, support email, privacy policy link, ' +
+      'and homepage link are filled in on the consent screen settings.'
     );
   }
   if (text.includes('invalid_request') || text.includes('invalid_client')) {
@@ -187,17 +209,19 @@ async function promptGoogleWithClient(clientId, language = 'tr') {
   });
 
   const result = await authRequest.promptAsync(GOOGLE_DISCOVERY);
-  if (result.type !== 'success') {
+  if (result.type !== 'success' || !result.params?.code) {
     throw new Error(describeGoogleFailure(result, language));
   }
 
   // Exchange the authorization code for tokens.
   // NOTE: the body is built manually -- Hermes (React Native's JS engine)
   // does NOT provide URLSearchParams, so using it would throw here.
+  const code = String(result.params.code);
+  const redirectUri = getRedirectUri();
   const formBody = [
-    ['code', result.params.code],
+    ['code', code],
     ['client_id', clientId],
-    ['redirect_uri', getRedirectUri()],
+    ['redirect_uri', redirectUri],
     ['grant_type', 'authorization_code'],
   ]
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
@@ -231,58 +255,135 @@ async function promptGoogleWithClient(clientId, language = 'tr') {
 }
 
 /**
- * Sign in with Google using OAuth 2.0.
- * Returns the user's profile information including profile picture.
+ * Obtain a fresh Google ID token for the currently signed-in Google account,
+ * used for Firebase re-authentication before sensitive operations (account
+ * deletion, email change). Resolves null when Google Sign-In is unavailable
+ * (Expo Go / web) or the user cancels — the caller handles the failure.
  *
- * On Android every registered Android-type client ID is tried in turn, so the
- * flow works regardless of which keystore signed the installed APK.
+ * @returns {Promise<string|null>}
+ */
+export async function getFreshGoogleIdToken() {
+  if (Platform.OS === 'web') return null;
+  try {
+    GoogleSignin.configure({
+      webClientId: GOOGLE_WEB_CLIENT_ID,
+      offlineAccess: false,
+    });
+    await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: false });
+    const signInResult = await GoogleSignin.signIn();
+    const info = signInResult?.data || signInResult;
+    return info?.idToken || null;
+  } catch (error) {
+    console.warn('getFreshGoogleIdToken failed:', error?.message || error);
+    return null;
+  }
+}
+
+/**
+ * Sign in with Google.
+ *
+ * Android (installed builds): uses NATIVE Google Sign-In
+ * (@react-native-google-signin/google-signin). Google no longer accepts
+ * browser custom-scheme redirects for Android OAuth clients (the source of
+ * "Error 400: invalid_request"), while the native flow is unaffected. The
+ * Google ID token is exchanged for a REAL Firebase Auth session, so Google
+ * users get the same verified identity (ID tokens for the backend, photoURL
+ * in their profile) as email/password users.
+ *
+ * Web / Expo Go: falls back to the legacy browser OAuth flow.
  *
  * @returns {Promise<{success: boolean, user?: {name: string, email: string, picture: string}, error?: string}>}
  */
 export async function signInWithGoogle(language = 'tr') {
-  // Fail fast with a clear message if no Android client ID was ever
-  // configured (otherwise Google answers with "Error 400: invalid_request").
-  if (Platform.OS === 'android' && !isAndroidClientConfigured()) {
-    return {
-      success: false,
-      error:
-        language === 'tr'
-          ? 'Google girişi bu derleme için yapılandırılmamış. Google Cloud Console\'da türü "Android" (WEB değil) olan OAuth istemcisini açın, İstemci Kimliğini kopyalayıp config.js içindeki GOOGLE_ANDROID_CLIENT_ID alanına yapıştırın ve yeniden derleyin.'
-          : 'Google sign-in is not configured for this build. In Google Cloud Console, open the OAuth client whose type is "Android" (NOT "Web"), copy its Client ID, paste it into GOOGLE_ANDROID_CLIENT_ID in config.js, and rebuild.',
-    };
-  }
+  const tr = language === 'tr';
 
-  // Web/iOS: single known client.
-  if (Platform.OS !== 'android') {
+  // ---- Android / iOS: native flow ------------------------------------------
+  if (Platform.OS !== 'web') {
     try {
-      return { success: true, user: await promptGoogleWithClient(getClientId(), language) };
+      GoogleSignin.configure({
+        // The WEB client ID of the same Firebase project — required so the
+        // native module returns an idToken that Firebase can exchange.
+        webClientId: GOOGLE_WEB_CLIENT_ID,
+        offlineAccess: false,
+      });
+
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const signInResult = await GoogleSignin.signIn();
+      // v13+ wraps the payload as { type: 'success', data: {...} }; older
+      // versions returned the payload directly. Support both shapes.
+      const info = signInResult?.data || signInResult;
+      const idToken = info?.idToken;
+      if (!idToken) {
+        throw new Error(
+          tr
+            ? 'Google kimlik belirteci alınamadı. webClientId ayarını kontrol edin.'
+            : 'No Google ID token was returned. Check the webClientId setting.'
+        );
+      }
+
+      // Exchange the Google ID token for a Firebase Auth session.
+      const { signInWithGoogleIdToken } = await import('./firebaseAuth.js');
+      const fbUser = await signInWithGoogleIdToken(idToken);
+
+      const fbEmail = (fbUser?.email || info?.user?.email || '').toLowerCase();
+      // Prefer the Firebase profile photo; fall back to Google's picture URL.
+      const picture = fbUser?.photoURL || info?.user?.photo || '';
+
+      return {
+        success: true,
+        user: {
+          name: fbUser?.displayName || info?.user?.name || '',
+          email: fbEmail,
+          picture,
+        },
+      };
     } catch (error) {
-      console.error('Google sign-in error:', error);
-      return { success: false, error: error.message || 'Google sign-in failed' };
+      const code = String(error?.code || '');
+      if (code.includes(statusCodes.SIGN_IN_CANCELLED) || /cancelled/i.test(String(error?.message))) {
+        return { success: false, error: tr ? 'Google girişi iptal edildi' : 'Google sign-in was cancelled' };
+      }
+      if (code.includes(statusCodes.IN_PROGRESS)) {
+        return {
+          success: false,
+          error: tr ? 'Giriş zaten devam ediyor. Lütfen bekleyin.' : 'A sign-in is already in progress.',
+        };
+      }
+      if (code.includes(statusCodes.PLAY_SERVICES_NOT_AVAILABLE)) {
+        return {
+          success: false,
+          error: tr
+            ? 'Google Play Hizmetleri kullanılamıyor. Lütfen güncelleyip tekrar deneyin.'
+            : 'Google Play Services is not available. Please update it and try again.',
+        };
+      }
+      console.error('Native Google sign-in error:', error);
+      // DEVELOPER_ERROR (code 10) is Android's catch-all for "the OAuth client
+      // does not match this app". The JS side already passes the project's WEB
+      // client ID (webClientId) — when Google still rejects the sign-in the
+      // google-services.json baked into the build is out of sync with the
+      // console (missing web client / wrong SHA-1), so spell that out.
+      if (/^\s*10\s*$/.test(String(error?.code)) || /DEVELOPER_ERROR/i.test(String(error?.message))) {
+        return {
+          success: false,
+          error: tr
+            ? 'Google oturum açma yapılandırması bu derleme ile eşleşmiyor (DEVELOPER_ERROR). google-services.json içindeki Web istemci kimliğini ve imza SHA-1 parmak izini Google Cloud Console ile eşitleyip uygulamayı yeniden derleyin.'
+            : 'Google sign-in configuration does not match this build (DEVELOPER_ERROR). Re-sync google-services.json — its Web client ID and signing SHA-1 — with Google Cloud Console and rebuild the app.',
+        };
+      }
+      return {
+        success: false,
+        error:
+          error?.message ||
+          (tr ? 'Google ile giriş başarısız oldu.' : 'Google sign-in failed.'),
+      };
     }
   }
 
-  // Android: try each registered Android client until one matches the
-  // fingerprint of the installed APK. All failures are captured so the user
-  // gets the most specific reason Google reported.
-  const clientIds = getAndroidClientIds();
-  let lastError = null;
-  for (const clientId of clientIds) {
-    try {
-      const user = await promptGoogleWithClient(clientId, language);
-      return { success: true, user };
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `Google sign-in: client ${clientId.slice(0, 18)}… failed:`,
-        error?.message
-      );
-    }
+  // ---- Web: legacy browser OAuth flow --------------------------------------
+  try {
+    return { success: true, user: await promptGoogleWithClient(getClientId(), language) };
+  } catch (error) {
+    console.error('Google sign-in error:', error);
+    return { success: false, error: error.message || 'Google sign-in failed' };
   }
-
-  console.error('Google sign-in error:', lastError);
-  return {
-    success: false,
-    error: (lastError && lastError.message) || 'Google sign-in failed',
-  };
 }

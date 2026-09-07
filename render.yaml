@@ -26,6 +26,13 @@ services:
       # Public, non-secret configuration:
       - key: USE_FIRESTORE
         value: "true"
+      # Media uploads land in this Firebase Storage bucket (private objects,
+      # served via /uploads/<name> -> short-lived signed URLs). The bucket is
+      # created once (e.g. "islami-ogreniyorum-media"); setting it here skips
+      # automatic bucket discovery. If unset, the server picks the project's
+      # first existing bucket and falls back to the local disk when none exist.
+      - key: MEDIA_BUCKET
+        value: "islami-ogreniyorum-media"
       # Secrets — set each of these in the Render dashboard (Environment tab).
       # GOOGLE_APPLICATION_CREDENTIALS_JSON = base64 of server/serviceAccountKey.json
       #   (Windows:  certutil -encode serviceAccountKey.json out.b64  → remove the

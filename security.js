@@ -19,13 +19,21 @@ import { REQUEST_SIGNING_KEY, RATE_LIMITS, SECURITY_CONFIG } from './config.js';
  * @param {string} path - API endpoint path
  * @param {object|string} body - Request body
  * @param {number} timestamp - Unix timestamp for replay protection
- * @returns {string} Hex-encoded HMAC-SHA256 signature
+ * @returns {Promise<string>} Hex-encoded HMAC-SHA256 signature
  */
 export async function signRequest(method, path, body, timestamp) {
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body || {});
   const payload = `${method.toUpperCase()}|${path}|${bodyStr}|${timestamp}`;
 
-  const key = await crypto.subtle.importKey(
+  // crypto.subtle is not available on all React Native platforms; if it's
+  // missing, request signing is skipped (callers already wrap in try/catch).
+  const subtle = crypto?.subtle;
+  if (!subtle || typeof subtle.importKey !== 'function') {
+    console.warn('crypto.subtle unavailable — skipping request signing');
+    return '';
+  }
+
+  const key = await subtle.importKey(
     'raw',
     new TextEncoder().encode(REQUEST_SIGNING_KEY),
     { name: 'HMAC', hash: 'SHA-256' },
@@ -33,7 +41,7 @@ export async function signRequest(method, path, body, timestamp) {
     ['sign']
   );
 
-  const signature = await crypto.subtle.sign(
+  const signature = await subtle.sign(
     'HMAC',
     key,
     new TextEncoder().encode(payload)
@@ -49,17 +57,22 @@ export async function signRequest(method, path, body, timestamp) {
  * @param {string} method - HTTP method
  * @param {string} path - API endpoint path
  * @param {object|string} body - Request body
- * @returns {object} Headers object with security headers
+ * @returns {Promise<object>} Headers object with security headers
  */
 export async function getSecurityHeaders(method, path, body) {
   const timestamp = Date.now();
   const signature = await signRequest(method, path, body, timestamp);
 
-  return {
-    'X-Request-Signature': signature,
+  const headers = {
     'X-Request-Timestamp': String(timestamp),
     'X-Request-Nonce': generateNonce(),
   };
+  // Only include the signature header when signing actually produced one.
+  // An empty string would be a malformed header value.
+  if (signature) {
+    headers['X-Request-Signature'] = signature;
+  }
+  return headers;
 }
 
 /**
@@ -67,9 +80,19 @@ export async function getSecurityHeaders(method, path, body) {
  * @returns {string} Hex-encoded random nonce
  */
 function generateNonce() {
-  const array = new Uint8Array(16);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+  try {
+    const array = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      crypto.getRandomValues(array);
+    } else {
+      // Fallback: Math.random is not cryptographic, but the nonce is only used
+      // for logging/dedup and is not security-critical if crypto is missing.
+      for (let i = 0; i < 16; i++) array[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return Date.now().toString(36);
+  }
 }
 
 // ---------------------------------------------------------------------------
