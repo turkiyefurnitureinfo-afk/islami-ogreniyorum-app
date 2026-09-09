@@ -22,8 +22,8 @@ export const API_URL = extra.apiUrl || 'https://islami-ogreniyorum-server.onrend
 // Served live by the backend itself (see server/index.js -> GET /privacy),
 // so this always works even though learningislamapp.com has no DNS yet.
 // If you later point that domain at a real host, switch back to
-// https://learningislamapp.com/privacy and rebuild the app.
-export const PRIVACY_POLICY_URL = extra.privacyPolicyUrl || `${API_URL}/privacy`;
+// https://www.learningislamapp.com/privacy-policy.html and rebuild the app.
+export const PRIVACY_POLICY_URL = extra.privacyPolicyUrl || 'https://www.learningislamapp.com/privacy-policy.html';
 
 // Support / contact email shown in Settings.
 export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
