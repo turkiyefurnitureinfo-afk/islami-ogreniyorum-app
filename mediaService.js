@@ -86,6 +86,23 @@ export async function uploadProfileImage(uri) {
 }
 
 /**
+ * Validate that a media URL is a renderable remote URL (http/https).
+ * Returns the URL if valid, or null if it's a local file:// path, empty,
+ * or otherwise unusable — so renderers can fall back to initials/placeholders.
+ * @param {string} [url]
+ * @returns {string|null}
+ */
+export function validateMediaUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  // Only remote URLs are renderable across devices. Local file:// paths,
+  // data: URIs (except tiny placeholders), and relative paths are NOT.
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return null;
+}
+
+/**
  * Convert a local file:// URI to a base64 data-URI string.
  * Handles both RN file:// paths and already-loaded data: URIs.
  * @param {string} uri

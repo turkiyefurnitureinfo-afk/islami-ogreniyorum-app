@@ -457,7 +457,18 @@ const QATab = ({
                 )}
 
                 {item.aiError && (
-                  <Text style={styles.aiErrorText}>{item.aiError}</Text>
+                  <View style={styles.aiErrorWrap}>
+                    <Text style={styles.aiErrorText}>{item.aiError}</Text>
+                    <Pressable
+                      style={styles.aiRetryButton}
+                      onPress={() => handleAIAnswer(item.id)}
+                      disabled={item.aiAnswerLoading}
+                    >
+                      <Text style={styles.aiRetryButtonText}>
+                        {t?.retry || 'Yeniden Dene'} / {t?.retryEn || 'Retry'}
+                      </Text>
+                    </Pressable>
+                  </View>
                 )}
 
                 {/* Fallback to web search if AI fails */}

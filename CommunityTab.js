@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { TranslateButton } from './useTranslate.js';
 import { useCachedAvatar } from './avatarCache.js';
+import { validateMediaUrl } from './mediaService.js';
 
 /** Single post video player (hook requires its own component instance). */
 function PostVideo({ uri, style }) {
@@ -318,7 +319,33 @@ const CommunityTab = ({
           {post.media && (
             <View style={styles.communityPostMedia}>
               {post.media.type === 'image' ? (
-                <Image source={{ uri: post.media.uri }} style={styles.communityPostImage} />
+                (() => {
+                  const validUri = validateMediaUrl(post.media.uri);
+                  if (!validUri) {
+                    return (
+                      <View style={[styles.communityMediaBroken, styles.communityPostImage]}>
+                        <Text style={styles.communityMediaBrokenText}>
+                          {t?.mediaUnavailable || '🖼️ Media unavailable'}
+                        </Text>
+                      </View>
+                    );
+                  }
+                  return (
+                    <Image
+                      source={{ uri: validUri }}
+                      style={styles.communityPostImage}
+                      onError={() => {
+                        // Mark this post's media as broken so the fallback
+                        // renders on next render instead of a broken image.
+                        setCommunityPosts((prev) =>
+                          prev.map((p) =>
+                            p.id === post.id ? { ...p, mediaBroken: true } : p
+                          )
+                        );
+                      }}
+                    />
+                  );
+                })()
               ) : (
                 <View>
                   <Text style={styles.communityMediaBadge}>🎥 {t?.video || 'Video'}</Text>

@@ -887,6 +887,23 @@ export function makeStyles(palette) {
       marginTop: 4,
       marginBottom: 4,
     },
+    aiErrorWrap: {
+      marginTop: 4,
+      gap: 6,
+    },
+    aiRetryButton: {
+      alignSelf: 'flex-start',
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: '#e05d5d',
+    },
+    aiRetryButtonText: {
+      color: '#e05d5d',
+      fontSize: 12,
+      fontWeight: '600',
+    },
     aiContribution: {
       backgroundColor: palette.soft,
       borderWidth: 1,
@@ -1013,6 +1030,15 @@ export function makeStyles(palette) {
     },
     communityPostMedia: {
       marginBottom: 8,
+    },
+    communityMediaBroken: {
+      backgroundColor: '#f0f0f0',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    communityMediaBrokenText: {
+      color: '#999',
+      fontSize: 13,
     },
     communityPostImage: {
       width: '100%',

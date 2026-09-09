@@ -65,7 +65,18 @@ export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
 //                                     registered in Firebase (SHA-1 + SHA-256 added
 //                                     under Project Settings → Your apps).
 //   - GOOGLE_WEB_CLIENT_ID          : Web-application client (client_type 3),
-//                                     used only for web builds / backend.
+//                                     REQUIRED for native Google Sign-In on BOTH
+//                                     Android and iOS. This is the #1 cause of
+//                                     "Google ID specifier cannot be obtained" /
+//                                     a missing idToken — without it the native
+//                                     flow cannot exchange a Google ID token for
+//                                     a Firebase session. In Firebase Console it
+//                                     is the "Web client ID" shown under
+//                                     Authentication → Sign-in method → Google
+//                                     → Web SDK configuration (the auto-created
+//                                     client whose ID ends in .apps.googleusercontent.com).
+//                                     googleAuth.js passes it as `webClientId`
+//                                     to GoogleSignin.configure().
 // googleAuth.js tries RELEASE → debug → EAS in order; the client whose SHA-1
 // matches the keystore that signed the installed APK is the one Google accepts.
 export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-3i1aml4qbto4cve3tmi8kjnmrqm0bro3.apps.googleusercontent.com';

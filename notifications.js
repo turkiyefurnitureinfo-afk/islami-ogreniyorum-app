@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { API_URL, SECURITY_CONFIG } from './config.js';
 import { getSecurityHeaders, checkRateLimit, validatePinningConfig } from './security.js';
 import { getCurrentFirebaseUser } from './firebaseAuth.js';
+import { ensureExactAlarmPermission } from './prayerAlarms.js';
 
 // Configure how notifications are presented while the app is in the foreground.
 // Wrapped in try/catch because setNotificationHandler can throw on platforms
@@ -43,10 +44,15 @@ try {
 // ---------------------------------------------------------------------------
 
 // Bundled loud chime (generated WAV in android/app/src/main/res/raw/)
-export const HIGH_ALARM_SOUND = 'notification_high.wav';
+// IMPORTANT: Android notification-channel sound names must NOT include the
+// file extension — expo-notifications resolves the name as res/raw/<name>.*.
+// Passing 'notification_high.wav' before created a channel with NO sound at
+// all, which is exactly why the prayer alarm looked scheduled but never rang.
+export const HIGH_ALARM_SOUND = 'notification_high';
 
 const ALARM_CHANNEL_ID = 'prayer-alarm';
 const DEFAULT_CHANNEL_ID = 'prayer-times';
+const COMMUNITY_CHANNEL_ID = 'community-activity';
 const REMINDER_INTERVAL_MIN = 5;   // re-ring cadence inside the alarm window
 const RING_WINDOW_MIN = 30;        // hard cap requested: stop after 30 minutes
 const ALARM_DAYS = 7;              // how many days ahead to pre-schedule chains
@@ -447,6 +453,14 @@ export function registerPrayerAlarmCancellationHandler() {
  */
 export async function setupNotificationChannel() {
   if (Platform.OS === 'android') {
+    // Request exact-alarm permission before creating channels so alarms fire
+    // precisely on time, even in Doze mode or when the app is closed.
+    try {
+      await ensureExactAlarmPermission();
+    } catch (e) {
+      // Non-fatal: channel creation still works without exact-alarm permission,
+      // but alarms may be slightly delayed under Doze.
+    }
     // Standard channel for System Default / Silent selections
     await Notifications.setNotificationChannelAsync(DEFAULT_CHANNEL_ID, {
       name: 'Namaz Vakitleri',
@@ -465,6 +479,21 @@ export async function setupNotificationChannel() {
       sound: HIGH_ALARM_SOUND,
       vibrationPattern: [0, 500, 250, 500, 250, 500],
       lightColor: '#d8b56a',
+      enableVibrate: true,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    });
+
+    // Community activity channel — used for new post / comment / like / Q&A
+    // push notifications. Distinct from prayer channels so users can mute
+    // community activity independently without silencing prayer times.
+    await Notifications.setNotificationChannelAsync(COMMUNITY_CHANNEL_ID, {
+      name: 'Topluluk Etkinliği / Community Activity',
+      description:
+        'Notifications for new community posts, comments, likes, and Q&A activity.',
+      importance: Notifications.AndroidImportance.DEFAULT,
+      sound: 'default',
+      vibrationPattern: [0, 200, 100, 200],
+      lightColor: '#4a90d9',
       enableVibrate: true,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     });
@@ -624,7 +653,17 @@ export async function notifyBackendLike(postId, contribId, userId) {
       'Content-Type': 'application/json',
       ...(await authHeaders()),
     };
-    const response = await secureFetch(`${API_URL}/api/posts/${postId}/contributions/${contribId}/like`, {
+    // Liking a QUESTION and liking an ANSWER are different server routes:
+    //   - question like -> POST /api/posts/:postId/like
+    //   - answer like   -> POST /api/posts/:postId/contributions/:contribId/like
+    // The old code ALWAYS used the contributions route, so a question like
+    // (contribId === null) produced ".../contributions/null/like", got a 404,
+    // and the question author never received the notification.
+    const path =
+      contribId == null
+        ? `${API_URL}/api/posts/${postId}/like`
+        : `${API_URL}/api/posts/${postId}/contributions/${contribId}/like`;
+    const response = await secureFetch(path, {
       method: 'POST',
       headers,
       body: { userId },
