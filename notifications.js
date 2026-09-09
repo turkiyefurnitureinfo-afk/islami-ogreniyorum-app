@@ -543,7 +543,7 @@ export async function getExpoPushToken() {
  * @param {string} userId - the user's unique ID (email or account ID)
  * @param {string} name - the user's display name
  */
-export async function registerDeviceWithBackend(userId, name) {
+export async function registerDeviceWithBackend(userId, email, name) {
   const expoPushToken = await getExpoPushToken();
   if (!expoPushToken) {
     console.log('No Expo push token available - skipping backend registration');
@@ -557,7 +557,13 @@ export async function registerDeviceWithBackend(userId, name) {
     const response = await secureFetch(`${API_URL}/api/register`, {
       method: 'POST',
       headers,
-      body: { userId, expoPushToken, name },
+      body: {
+        userId,
+        email: email || null,
+        expoPushToken,
+        name,
+        platform: Platform.OS,
+      },
     });
     return response.ok;
   } catch (error) {

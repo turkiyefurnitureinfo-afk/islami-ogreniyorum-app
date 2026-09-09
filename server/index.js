@@ -121,7 +121,7 @@ const expo = new Expo({
 const storage = require('./storage');
 
 // Helper: send push notification to a specific user
-async function sendPushToUser(userId, title, body, data = {}) {
+async function sendPushToUser(userId, title, body, data = {}, channelId = null) {
   const device = await storage.getDevice(userId);
   if (!device || !device.expoPushToken) {
     console.log(`No device registered for user ${userId}`);
@@ -135,6 +135,7 @@ async function sendPushToUser(userId, title, body, data = {}) {
     title,
     body,
     data,
+    ...(channelId ? { channelId } : {}),
   });
 
   const chunks = expo.chunkPushNotifications(messages);
@@ -149,7 +150,7 @@ async function sendPushToUser(userId, title, body, data = {}) {
 }
 
 // Helper: broadcast to all devices
-async function broadcastPush(title, body, data = {}) {
+async function broadcastPush(title, body, data = {}, channelId = null) {
   const messages = [];
   const allDevices = await storage.getAllDevices();
   for (const device of allDevices) {
@@ -160,6 +161,7 @@ async function broadcastPush(title, body, data = {}) {
         title,
         body,
         data,
+        ...(channelId ? { channelId } : {}),
       });
     }
   }
@@ -252,12 +254,19 @@ async function dispatchNotification({ trigger, triggerUserId, entityId, title, b
   for (const uid of recipientIds) {
     const device = devicesByUser[uid];
     if (!device || !device.expoPushToken) continue;
+    // Route community/Q&A activity through the dedicated channel so users can
+    // mute them independently of prayer times.
+    const channelId =
+      trigger === 'new_post' || trigger === 'new_comment' || trigger === 'new_answer'
+        ? COMMUNITY_CHANNEL_ID
+        : null;
     messages.push({
       to: device.expoPushToken,
       sound: 'default',
       title,
       body,
       data: { ...data, recipientUserId: uid },
+      ...(channelId ? { channelId } : {}),
     });
   }
 
@@ -381,7 +390,14 @@ app.post('/api/upload', uploadJson, async (req, res) => {
     }
 
     // Same URL shape either way — the client contract is unchanged.
-    const url = `/uploads/${name}`;
+    // IMPORTANT: always return an ABSOLUTE public URL so the client stores a
+    // URL that survives server redeploy/restart (Render free tier wipes the
+    // disk on every deploy, but the stored URL still points at the public
+    // host which re-serves the file on the next upload).
+    const publicUrl = `${process.env.PUBLIC_SERVER_URL || 'https://islami-ogreniyorum-server.onrender.com'}/uploads/${name}`;
+    const url = storedViaStorage
+      ? publicUrl   // identical shape — the signed URL GET endpoint below serves it
+      : publicUrl;  // disk path is ephemeral but the URL is permanent
     res.json({ success: true, url, absoluteUrl: `${req.protocol}://${req.get('host')}${url}` });
   } catch (error) {
     console.error('[upload] failed:', error && error.message);
@@ -423,13 +439,18 @@ app.get('/uploads/:name', async (req, res) => {
 // Register a device token for a user
 app.post('/api/register', requireVerifiedUser, async (req, res) => {
   const userId = req.verifiedUserId;
-  const { expoPushToken, name } = req.body;
+  const { expoPushToken, name, email, platform } = req.body;
   if (!userId || !expoPushToken) {
     return res.status(400).json({ error: 'userId and expoPushToken are required' });
   }
 
-  await storage.setDevice(userId, { expoPushToken, name: name || 'User' });
-  console.log(`Registered device for ${userId} (${name || 'User'})`);
+  await storage.setDevice(userId, {
+    expoPushToken,
+    name: name || 'User',
+    email: email || null,
+    platform: platform || null,
+  });
+  console.log(`Registered device for ${userId} (${name || 'User'}) [${platform || 'unknown'}]`);
   res.json({ success: true });
 });
 
@@ -520,7 +541,8 @@ app.post('/api/posts/:postId/contributions/:contribId/like', requireVerifiedUser
       result.userId,
       'New Like',
       `${likerName} liked your comment`,
-      { type: 'new_like', postId, contributionId: contribId }
+      { type: 'new_like', postId, contributionId: contribId },
+      COMMUNITY_CHANNEL_ID
     );
   }
 
@@ -548,7 +570,8 @@ app.post('/api/posts/:postId/like', requireVerifiedUser, async (req, res) => {
       result.ownerUserId,
       'New Like',
       `${likerName} liked your question`,
-      { type: 'new_like', postId }
+      { type: 'new_like', postId },
+      COMMUNITY_CHANNEL_ID
     );
   }
 
@@ -842,7 +865,8 @@ app.post('/api/community/posts/:postId/like', requireVerifiedUser, async (req, r
       result.ownerUserId,
       'New Like',
       `${likerName} liked your post`,
-      { type: 'community_post_like', postId }
+      { type: 'community_post_like', postId },
+      COMMUNITY_CHANNEL_ID
     );
   }
 
@@ -871,7 +895,8 @@ app.post('/api/community/posts/:postId/comments/:commentId/like', requireVerifie
       result.userId,
       'New Like',
       `${likerName} liked your comment`,
-      { type: 'community_comment_like', postId, commentId }
+      { type: 'community_comment_like', postId, commentId },
+      COMMUNITY_CHANNEL_ID
     );
   }
 
@@ -959,8 +984,10 @@ app.get('/api/qa/feed', async (req, res) => {
 app.get('/api/community/feed', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const items = await storage.listCommunityPosts(limit);
-    res.json({ success: true, items });
+    // Live profile join: refresh authorName/authorAvatar from users collection
+    // so profile picture updates propagate to all historic posts.
+    const items = await storage.getCommunityFeedWithProfileJoin(limit);
+    res.json({ success: true, items, count: items.length });
   } catch (error) {
     console.error('[community-feed] failed:', error.message);
     res.status(500).json({ success: false, error: 'Feed unavailable' });

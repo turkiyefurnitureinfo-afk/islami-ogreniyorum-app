@@ -344,6 +344,32 @@ const memImpl = {
       }));
   },
 
+  /** Community feed with live user-profile join.
+   *  Fetches the latest displayName/photoURL from the users collection for each
+   *  post's author so that if a user updates their profile picture, ALL their
+   *  existing posts automatically reflect the new photo.
+   *  Memory backend: joins against memUsers (email -> { displayName, photoURL }).
+   *  Firestore backend: joins against users/{ownerUserId} doc.
+   */
+  async getCommunityFeedWithProfileJoin(limit = 50) {
+    const posts = await this.listCommunityPosts(limit);
+    return Promise.all(
+      posts.map(async (post) => {
+        if (!post.ownerUserId) return post;
+        try {
+          const user = await this.getUser(post.ownerUserId);
+          return {
+            ...post,
+            authorName: user?.displayName || post.authorName || null,
+            authorAvatar: user?.photoURL || post.authorAvatar || null,
+          };
+        } catch {
+          return post;
+        }
+      })
+    );
+  },
+
   async likeCommunityPost(postId, userId) {
     const p = memCommunity.get(String(postId));
     if (!p) return null;
@@ -726,6 +752,38 @@ const fsImpl = {
       out.push({ id: doc.id, ...doc.data(), comments });
     }
     return out;
+  },
+
+  /** Community feed with live user-profile join (Firestore backend).
+   *  For each post, reads users/{ownerUserId} to refresh authorName/photoURL
+   *  from the profile — so updating a profile picture updates ALL historic posts.
+   *  Handles both `photoURL` and `profilePicture` field names (legacy + new).
+   */
+  async getCommunityFeedWithProfileJoin(limit = 50) {
+    const posts = await this.listCommunityPosts(limit);
+    return Promise.all(
+      posts.map(async (post) => {
+        if (!post.ownerUserId) return post;
+        try {
+          const userSnap = await db.doc(`users/${post.ownerUserId}`).get();
+          if (userSnap.exists) {
+            const user = userSnap.data();
+            // Profile photos may be stored under `photoURL` (Firebase Auth
+            // style) or `profilePicture` (older client uploads) — try both.
+            const updatedPhoto =
+              user?.photoURL || user?.profilePicture || post.authorAvatar || null;
+            return {
+              ...post,
+              authorName: user?.displayName || user?.fullName || post.authorName || null,
+              authorAvatar: updatedPhoto,
+            };
+          }
+        } catch {
+          // If the join fails for one post, keep the original data.
+        }
+        return post;
+      })
+    );
   },
 
   async deleteQAPost(postId, ownerUserId) {
