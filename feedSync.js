@@ -75,6 +75,14 @@ export const onlyRealUserPosts = (list) =>
  * @param {'tr'|'en'} language
  */
 export function normalizeServerQA(doc, language) {
+  // Legacy field name normalization for avatar URLs.
+  const rawAuthorPhoto =
+    doc.authorPhoto || doc.author_photo || doc.authorAvatar || doc.userPhoto || doc.photoURL || null;
+  const validAuthorPhoto =
+    rawAuthorPhoto && /^https?:\/\//i.test(String(rawAuthorPhoto).trim())
+      ? String(rawAuthorPhoto).trim()
+      : null;
+
   return {
     id: 'srv-' + doc.id,
     serverPostId: doc.id,
@@ -86,16 +94,28 @@ export function normalizeServerQA(doc, language) {
     likedByMe: false,
     ownerEmail: doc.ownerUserId || null,
     createdAt: doc.createdAt || null,
-    answers: (doc.contributions || []).map((c) => ({
-      id: 'srv-' + doc.id + '-' + c.id,
-      serverContribId: c.id,
-      user: { name: c.authorName || '👤', avatar: '👤', avatarUrl: c.authorAvatar || null },
-      text: c.text || '',
-      timestamp: timeAgo(c.createdAt, language),
-      likes: c.likes || 0,
-      likedByMe: false,
-      ownerEmail: c.userId || null,
-    })),
+    answers: (doc.contributions || []).map((c) => {
+      const cRawPhoto =
+        c.authorPhoto || c.author_photo || c.authorAvatar || c.userPhoto || c.photoURL || null;
+      const cValidPhoto =
+        cRawPhoto && /^https?:\/\//i.test(String(cRawPhoto).trim())
+          ? String(cRawPhoto).trim()
+          : null;
+      return {
+        id: 'srv-' + doc.id + '-' + c.id,
+        serverContribId: c.id,
+        user: {
+          name: c.authorName || c.author_name || c.userName || '👤',
+          avatar: '👤',
+          avatarUrl: cValidPhoto,
+        },
+        text: c.text || '',
+        timestamp: timeAgo(c.createdAt, language),
+        likes: c.likes || 0,
+        likedByMe: false,
+        ownerEmail: c.userId || null,
+      };
+    }),
     timestamp: timeAgo(doc.createdAt, language),
   };
 }
@@ -107,13 +127,39 @@ export function normalizeServerQA(doc, language) {
  * @param {'tr'|'en'} language
  */
 export function normalizeServerCommunityPost(doc, language) {
+  // --- Legacy field name normalization ---
+  // Older app versions and server records used different field names. Map all
+  // known variants to the canonical shape the UI expects.
+  const rawMediaUrl =
+    doc.mediaUrl || doc.media_url || doc.mediaUri || doc.imageUrl || doc.image_url || null;
+  const rawMediaType =
+    doc.mediaType || doc.media_type || doc.imageType || doc.type || null;
+  const rawAuthorPhoto =
+    doc.authorPhoto || doc.author_photo || doc.authorAvatar || doc.userPhoto || doc.photoURL || null;
+  const rawAuthorName =
+    doc.authorName || doc.author_name || doc.userName || doc.displayName || '👤';
+  const rawOwnerEmail =
+    doc.ownerEmail || doc.owner_email || doc.ownerUserId || doc.userId || null;
+
+  // --- URL validation: only allow remote http(s) URLs ---
+  // Local file:// paths, data: URIs, and relative paths are NOT renderable
+  // across devices and must be nulled out to prevent broken images.
+  const validMediaUrl =
+    rawMediaUrl && /^https?:\/\//i.test(String(rawMediaUrl).trim())
+      ? String(rawMediaUrl).trim()
+      : null;
+  const validAuthorPhoto =
+    rawAuthorPhoto && /^https?:\/\//i.test(String(rawAuthorPhoto).trim())
+      ? String(rawAuthorPhoto).trim()
+      : null;
+
   return {
     // Firestore doc id == the author's original local numeric post id, so
     // comment/like routing keeps working on other devices.
     id: doc.id,
     serverId: doc.id,
-    user: { name: doc.authorName || '👤', avatar: '👤', avatarUrl: doc.authorAvatar || null },
-    ownerEmail: doc.ownerUserId || null,
+    user: { name: rawAuthorName || '👤', avatar: '👤', avatarUrl: validAuthorPhoto },
+    ownerEmail: rawOwnerEmail || null,
     text: doc.text || '',
     // Machine-sortable creation time (ISO). Used to keep the feed newest-first
     // even after a merge; `timestamp` above is the human-readable version.
@@ -122,20 +168,32 @@ export function normalizeServerCommunityPost(doc, language) {
     likes: doc.likes || 0,
     likedByMe: false,
     media:
-      doc.mediaType && doc.mediaUri
-        ? { type: doc.mediaType, uri: doc.mediaUri }
+      rawMediaType && validMediaUrl
+        ? { type: rawMediaType.split('/')[0] || 'image', uri: validMediaUrl }
         : null,
-    comments: (doc.comments || []).map((c) => ({
-      id: 'srv-' + doc.id + '-' + c.id,
-      serverId: c.id,
-      user: { name: c.authorName || '👤', avatar: '👤', avatarUrl: c.authorAvatar || null },
-      commenterEmail: c.userId || null,
-      text: c.text || '',
-      createdAt: c.createdAt || null,
-      timestamp: timeAgo(c.createdAt, language),
-      likes: 0,
-      likedByMe: false,
-    })),
+    comments: (doc.comments || []).map((c) => {
+      const cRawPhoto =
+        c.authorPhoto || c.author_photo || c.authorAvatar || c.userPhoto || c.photoURL || null;
+      const cValidPhoto =
+        cRawPhoto && /^https?:\/\//i.test(String(cRawPhoto).trim())
+          ? String(cRawPhoto).trim()
+          : null;
+      return {
+        id: 'srv-' + doc.id + '-' + c.id,
+        serverId: c.id,
+        user: {
+          name: c.authorName || c.author_name || c.userName || '👤',
+          avatar: '👤',
+          avatarUrl: cValidPhoto,
+        },
+        commenterEmail: c.userId || c.commenterEmail || null,
+        text: c.text || '',
+        createdAt: c.createdAt || null,
+        timestamp: timeAgo(c.createdAt, language),
+        likes: 0,
+        likedByMe: false,
+      };
+    }),
   };
 }
 

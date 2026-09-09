@@ -862,10 +862,10 @@ export async function getAIAnswer(question, language = 'tr') {
     console.warn('[AI] Web-search answer failed:', error?.message || error);
   }
 
-  // Secondary: the backend's own search pipeline (Google Programmable
-  // Search when configured, else DuckDuckGo / Wikipedia). Useful when the
-  // on-device network path is restricted but the server can reach out.
-  console.log('[AI] Attempting backend AI fallback');
+  // Secondary: the backend's Hugging Face pipeline (Qwen first, then web
+  // search). Useful when the on-device network path is restricted but the
+  // server can reach out.
+  console.log('[AI] Attempting backend AI fallback (Hugging Face)');
   try {
     const serverAnswer = await fetchServerAIAnswer(safeQuestion, language);
     if (serverAnswer) {
@@ -875,6 +875,8 @@ export async function getAIAnswer(question, language = 'tr') {
     }
     console.warn('[AI] Backend AI returned null/empty');
   } catch (error) {
+    // Surface the warming-up signal to the caller (don't swallow it).
+    if (error.isWarmingUp) throw error;
     console.warn('[AI] Backend AI fallback failed:', error?.message || error);
   }
 
@@ -890,14 +892,15 @@ export async function getAIAnswer(question, language = 'tr') {
 
 /**
  * Backend AI fallback: ask our own server (Render) for an answer. The server
- * answers from web-search results (Google Programmable Search when configured,
- * else DuckDuckGo / Wikipedia). Used as a secondary path when the on-device
- * search cannot reach the internet but the server can.
+ * answers from Hugging Face (Qwen) first, then web-search results. Used as a
+ * secondary path when the on-device search cannot reach the internet but the
+ * server can.
  *
  * @param {string} question
  * @param {'tr'|'en'} language
  * @returns {Promise<{answer:string, provider:string, model?:string}|null>}
  *   null when the server has no answer (non-OK / offline / timeout).
+ * @throws {{isWarmingUp:boolean}} when the HF model is warming up (HTTP 503).
  */
 async function fetchServerAIAnswer(question, language) {
   const controller = new AbortController();
@@ -909,15 +912,28 @@ async function fetchServerAIAnswer(question, language) {
       body: JSON.stringify({ question, language }),
       signal: controller.signal,
     });
+    // Hugging Face 503 = model warming up. Surface this so the UI can retry.
+    if (resp.status === 503) {
+      const data = await resp.json().catch(() => ({}));
+      if (data && data.isWarmingUp) {
+        const err = new Error(data.error || 'Model warming up');
+        err.isWarmingUp = true;
+        throw err;
+      }
+    }
     if (!resp.ok) return null;
     const data = await resp.json().catch(() => null);
     if (!data || !data.success || !data.answer) return null;
     return {
       answer: String(data.answer),
-      provider: data.provider || 'google-search',
+      provider: data.provider || 'huggingface',
       ...(data.model ? { model: data.model } : {}),
+      ...(Array.isArray(data.sources) && data.sources.length > 0
+        ? { sources: data.sources }
+        : {}),
     };
   } catch (error) {
+    if (error.isWarmingUp) throw error; // re-throw warming-up signal
     console.warn('Server AI fallback unavailable:', error?.message || error);
     return null;
   } finally {
@@ -951,6 +967,14 @@ export function isAIConfigError(error) {
 export function describeAIError(error, language = 'tr') {
   const text = `${error?.code || ''} ${error?.message || ''}`;
   const tr = language === 'tr';
+
+  // Hugging Face model warming up (cold start on the free tier) — the most
+  // actionable error: tell the user to retry in a few seconds.
+  if (error?.isWarmingUp || /warming up|model is warming/i.test(text)) {
+    return tr
+      ? 'AI modeli şu an ısınıyor (ücretsiz katman). Lütfen 10-15 saniye sonra tekrar deneyin.'
+      : 'The AI model is warming up (free tier). Please try again in 10-15 seconds.';
+  }
 
   // Network-level failures (offline, timeout, DNS) — the most common cause
   // now that answers come from Wikipedia / DuckDuckGo.

@@ -1047,6 +1047,16 @@ app.post('/api/ai/answer', async (req, res) => {
         : {}),
     });
   } catch (error) {
+    // Hugging Face 503 = model is warming up (cold start on the free tier).
+    // Signal this explicitly so the client can offer a retry button.
+    if (error && error.isWarmingUp) {
+      console.warn('[ai/answer] Hugging Face model warming up');
+      return res.status(503).json({
+        success: false,
+        error: 'Model warming up',
+        isWarmingUp: true,
+      });
+    }
     console.error('AI answer error:', error.message);
     res.status(500).json({ error: 'Failed to generate answer' });
   }
