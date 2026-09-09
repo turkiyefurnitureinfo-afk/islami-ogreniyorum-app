@@ -54,6 +54,7 @@ import {
   registerAlarmStopHandler,
   sanitizePrayerAlarms,
   defaultPrayerAlarms,
+  ensureExactAlarmPermission,
 } from './prayerAlarms.js';
 import { signInWithGoogle } from './googleAuth.js';
 import { getAIAnswer, describeAIError } from './aiLogic.js';
@@ -522,9 +523,17 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // session and never receive cross-user notifications.
   const deviceRegRanRef = React.useRef(false);
   useEffect(() => {
-    if (!hydrated || !signedIn || !account?.email || !notificationsOn) return;
+    if (!hydrated || !signedIn || !account?.email) return;
     if (deviceRegRanRef.current) return;
     deviceRegRanRef.current = true;
+
+    // Ask for the POST_NOTIFICATIONS runtime permission (Android 13+) as soon
+    // as a user signs in. This must be granted for community/Q&A push to show
+    // even when the prayer-alarm toggle is intentionally OFF (previously the
+    // permission was only requested inside the prayer-alarm scheduler).
+    requestNotificationPermissions().catch(() => {});
+    ensureExactAlarmPermission().catch(() => {});
+
     const attemptRegistration = (attempt) => {
       registerDeviceWithBackend(account.email, account.fullName)
         .then((ok) => {
@@ -542,7 +551,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
         });
     };
     attemptRegistration(1);
-  }, [hydrated, signedIn, account?.email, account?.fullName, notificationsOn]);
+  }, [hydrated, signedIn, account?.email, account?.fullName]);
 
   // Schedule or cancel prayer notifications based on settings
   useEffect(() => {
@@ -562,6 +571,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
         if (isActive) setNotificationsOn(false);
         return;
       }
+
+      // Request SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM on Android 12+ so that
+      // prayer alarms fire precisely on time, even in Doze mode or when the app
+      // is closed. Without this, exact alarms are deferred by the OS.
+      await ensureExactAlarmPermission();
 
       // Compute today's prayer times as a snapshot for scheduling.
       // Prefers the server-provided Diyanet-convention times; falls back to
@@ -1200,21 +1214,34 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
     // Register the question with the backend so other users get a push,
     // then store the server-assigned ID on this question so later answers
-    // and likes can be routed back to the right authors. The Post Question
-    // button shows a loading spinner until this completes (bounded to 12s).
-    const result = await withTimeout(
-      notifyBackendNewQuestion(account.email || 'guest', askedText, account.fullName || null, profilePicture || null),
-      12000,
-      { ok: false, postId: null }
+    // and likes can be routed back to the right authors.
+    //
+    // IMPORTANT: this runs in the BACKGROUND (fire-and-forget). Previously it
+    // was `await`ed FIRST, so the AI answer below did not even START until the
+    // backend POST resolved — or worse, timed out after up to 12 seconds on a
+    // slow backend. That delay made answers feel broken. Now the question posts
+    // optimistically and the AI answer begins immediately; the server ID is
+    // attached when the response arrives.
+    const resultPromise = notifyBackendNewQuestion(
+      account.email || 'guest',
+      askedText,
+      account.fullName || null,
+      profilePicture || null
     );
-    if (result && result.ok && result.postId) {
-      setQAndA(prev => prev.map(q => (
-        sameId(q.id, questionId) ? { ...q, serverPostId: result.postId } : q
-      )));
-    }
+    withTimeout(resultPromise, 12000, { ok: false, postId: null })
+      .then((result) => {
+        if (result && result.ok && result.postId) {
+          setQAndA(prev => prev.map(q => (
+            sameId(q.id, questionId) ? { ...q, serverPostId: result.postId } : q
+          )));
+        }
+      })
+      .catch(() => {});
     setPostingQuestion(false);
 
     // Automatically generate an AI answer for the freshly asked question.
+    // Started IMMEDIATELY (before the backend registration above resolves) so
+    // the user sees the answer as quickly as the internet allows.
     handleAIAnswer(questionId, askedText);
   };
 
@@ -1746,7 +1773,26 @@ const [profileDirectory, setProfileDirectory] = useState({});
       if (commRes && commRes.ok) {
         const data = await commRes.json().catch(() => null);
         if (data && Array.isArray(data.items)) {
-          const serverP = onlyRealUserPosts(data.items.map((d) => normalizeServerCommunityPost(d, language)));
+          const serverP = onlyRealUserPosts(
+            data.items
+              .map((d) => normalizeServerCommunityPost(d, language))
+              // Normalize media URLs so images/videos render on EVERY device:
+              // the server may hold an absolute https:// URL or, for posts
+              // recorded by older app versions, a relative /uploads/<name>
+              // path that only resolves against the API origin.
+              .map((p) => {
+                if (p.media && p.media.uri && !/^https?:\/\//i.test(p.media.uri)) {
+                  return {
+                    ...p,
+                    media: {
+                      ...p.media,
+                      uri: p.media.uri.startsWith('/') ? `${API_URL}${p.media.uri}` : p.media.uri,
+                    },
+                  };
+                }
+                return p;
+              })
+          );
           // Warm the on-disk avatar cache while online so pictures survive offline.
           precacheAvatars([
             ...serverP.map((p) => p.user && p.user.avatarUrl),

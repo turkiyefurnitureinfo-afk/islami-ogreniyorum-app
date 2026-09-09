@@ -64,6 +64,8 @@ export async function firebaseSendPasswordReset(email) {
   await auth.sendPasswordResetEmail(email);
 }
 
+
+
 /** Sign out the current Firebase user. */
 export async function firebaseSignOut() {
   const auth = firebaseAuthInstance();

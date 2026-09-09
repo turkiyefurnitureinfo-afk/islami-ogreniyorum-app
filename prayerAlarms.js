@@ -21,7 +21,7 @@
 // catch-up rings without touching the other prayers.
 // ---------------------------------------------------------------------------
 
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, Platform, PermissionsAndroid } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { HIGH_ALARM_SOUND } from './notifications.js';
 
@@ -111,8 +111,11 @@ export function buildAlarmContent({ prayerLabel, language, isCatchUp, chainId })
   return {
     title,
     body,
-    // Sound comes from the loud Android alarm channel (bundled chime).
-    sound: undefined,
+    // Sound is normally driven by the loud Android alarm channel (bundled
+    // chime), but we ALSO set it on the content itself (extension-less name)
+    // so the chime plays even if a device has a stale channel created with the
+    // old, broken 'notification_high.wav' sound name.
+    sound: HIGH_ALARM_SOUND,
     channelId: ALARM_CHANNEL_ID,
     // Shows the ⏹ Stop action button on the notification itself.
     categoryIdentifier: ALARM_CATEGORY_ID,
@@ -174,6 +177,12 @@ async function ensureExactAlarmPermission() {
  * is present in the build, arm a guaranteed full-screen, exact alarm for the next
  * occurrence. Falls back silently (and fully) to expo-notifications if the module
  * is not built in or throws — zero regression on devices without it.
+ *
+ * The native AlarmClock module uses AlarmManager.setAlarmClock() which is:
+ *   - Exact: fires precisely on time (not batched with other alarms)
+ *   - Doze-exempt: fires even when the device is in Doze/App Standby
+ *   - Full-screen: shows a full-screen intent when it fires
+ *   - User-visible: shows in the system alarm clock UI
  */
 async function armNativeAlarm(tsEpochMs, chainId, label, language) {
   try {
@@ -185,12 +194,22 @@ async function armNativeAlarm(tsEpochMs, chainId, label, language) {
       tsEpochMs > 0
     ) {
       await Native.setAlarmClock(tsEpochMs, label, chainId);
+    } else {
+      // No native AlarmClock module — expo-notifications DATE trigger is already
+      // scheduled above. On Android 12+ without SCHEDULE_EXACT_ALARM the OS may
+      // delay it slightly under Doze, but it WILL fire.
     }
   } catch (_e) {
-    // Native alarm unavailable/failed — expo-notifications path already scheduled stiff acts.
-
+    // Native alarm unavailable/failed — expo-notifications path already scheduled.
   }
 }
+
+/**
+ * Public: re-export ensureExactAlarmPermission so callers (App.js, SettingsTab)
+ * can request the SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM app-op on Android 12+
+ * before scheduling. Returns true when exact alarms are available.
+ */
+export { ensureExactAlarmPermission };
 
 /**
  * Schedule every enabled alarm from a per-prayer config.
@@ -209,23 +228,24 @@ async function armNativeAlarm(tsEpochMs, chainId, label, language) {
 export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t }) {
   if (Platform.OS !== 'android') return 0;
 
-  // Channels must exist BEFORE scheduling or Android falls back to defaults.
-  await setupAlarmChannel();
-
-  // Ask for the exact-alarm app-op. When the user or the OS denies it, this
-  // only affects timing accuracy: expo-notifications' native scheduling
-  // delegate re-checks AlarmManager.canScheduleExactAlarms() per trigger and
-  // automatically downgrades to inexact setAndAllowWhileIdle(), so denial can
-  // never crash scheduling or prevent notifications from firing.
-  const exactGranted = await ensureExactAlarmPermission();
-  if (!exactGranted) {
-    console.info(
-      'Prayer alarms scheduled WITHOUT exact-alarm capability — rings may be ' +
-        'delayed by a few minutes under Doze. All triggers remain active.'
-    );
-  }
-
   try {
+    // Ask for the exact-alarm app-op. When the user or the OS denies it, this
+    // only affects timing accuracy: expo-notifications' native scheduling
+    // delegate re-checks AlarmManager.canScheduleExactAlarms() per trigger and
+    // automatically downgrades to inexact setAndAllowWhileIdle(), so denial can
+    // never crash scheduling or prevent notifications from firing.
+    const exactGranted = await ensureExactAlarmPermission();
+    if (!exactGranted) {
+      console.info(
+        'Prayer alarms scheduled WITHOUT exact-alarm capability — rings may be ' +
+          'delayed by a few minutes under Doze. All triggers remain active.'
+      );
+    }
+
+    // Channels must exist BEFORE scheduling or Android falls back to defaults
+    // (wrong sound / no vibration / no high alarm).
+    await setupAlarmChannel();
+
     // Wipe everything previously scheduled (old alarms + legacy schedules).
     await Notifications.cancelAllScheduledNotificationsAsync();
 
@@ -349,6 +369,9 @@ export function registerAlarmStopHandler() {
  */
 export async function setupAlarmChannel() {
   if (Platform.OS !== 'android') return;
+  // Request exact-alarm permission before creating the channel so alarms fire
+  // precisely on time, even in Doze mode or when the app is closed.
+  await ensureExactAlarmPermission();
   await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
     name: 'Namaz Alarmları',
     description: 'Prayer time alarms — rings like an alarm clock until turned off.',

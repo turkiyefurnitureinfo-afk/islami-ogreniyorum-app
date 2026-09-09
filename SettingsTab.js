@@ -411,16 +411,22 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
               if (isFirebaseConfigured()) {
                 let reauth = { ok: false, reason: 'auth/missing-credentials' };
                 if (isGoogleUser) {
+                  // Google users: try silent re-auth first (refresh token)
                   reauth = await ensureFreshLogin({ isGoogleUser: true });
-                } else if (account?.password) {
-                  reauth = await ensureFreshLogin({
-                    isGoogleUser: false,
-                    email: account.email,
-                    password: account.password,
-                  });
-                }
-                if (!reauth.ok && !reauth.reason?.includes('no-current-user')) {
-                  // Session too old / re-auth failed — ask for credentials.
+                  if (!reauth.ok) {
+                    // Silent re-auth failed — prompt for Google sign-in again
+                    try {
+                      const { signInWithGoogle } = require('./googleAuth.js');
+                      const googleResult = await signInWithGoogle(language);
+                      if (googleResult.success) {
+                        reauth = { ok: true };
+                      }
+                    } catch (googleError) {
+                      console.warn('Google re-auth failed:', googleError?.message || googleError);
+                    }
+                  }
+                } else {
+                  // Email/password users: always prompt for password since we don't store it locally
                   const creds = await promptForPassword(
                     getTranslation('reauthPasswordTitle', 'Confirm your password'),
                     getTranslation('reauthPasswordMessage', 'Deleting your account is permanent. Please enter your password to continue.')
@@ -434,7 +440,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
                     password: creds,
                   });
                 }
-                if (!reauth.ok) {
+                if (!reauth.ok && !reauth.reason?.includes('no-current-user')) {
                   Alert.alert(
                     getTranslation('error', 'Error'),
                     friendlyFirebaseError({ code: reauth.reason }, language || 'tr')
