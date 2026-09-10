@@ -41,8 +41,8 @@ const stylesFallbackText = { fontSize: 18 };
 
 /**
  * Tappable source links shown under a web-search answer (provider
- * 'google-search'). Rendered from the structured `sources` array that the
- * backend returns so links open in the browser with one tap.
+ * 'google-search' / 'serper'). Rendered from the structured `sources` array
+ * that the backend returns so links open in the browser with one tap.
  */
 const AISources = ({ sources, styles }) => {
   if (!Array.isArray(sources) || sources.length === 0) return null;
@@ -309,7 +309,7 @@ const QATab = ({
                   {item.aiAnswer && (
                     <View style={styles.aiBadgeWrap}>
                       <Text style={styles.aiBadge}>
-                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                        {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'serper' ? '🔎 Web Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                       </Text>
                     </View>
                   )}
@@ -484,7 +484,7 @@ const QATab = ({
                 {item.aiAnswer && (
                   <View style={styles.aiBadgeWrap}>
                     <Text style={styles.aiBadge}>
-                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
+                      {item.aiAnswer.aiProvider === 'gemini' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'firebase-ai' ? '✨ Gemini (Firebase AI)' : item.aiAnswer.aiProvider === 'gemini-rest' ? '✨ Gemini' : item.aiAnswer.aiProvider === 'google-search' ? '🔎 Google Search' : item.aiAnswer.aiProvider === 'serper' ? '🔎  Web Search' : item.aiAnswer.aiProvider === 'google' ? '🔎 Google' : item.aiAnswer.aiProvider === 'openai' ? '✨ OpenAI' : '🤖 AI Assistant'}
                     </Text>
                   </View>
                 )}
