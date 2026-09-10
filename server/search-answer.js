@@ -1,18 +1,18 @@
 // ---------------------------------------------------------------------------
-// search-answer.js — "Google Search" answer source (fallback for Gemini)
+// search-answer.js — web-search answer source (snippet fallback / legacy endpoint)
 // ---------------------------------------------------------------------------
-// When Gemini is unavailable (no credits / quota / outage), this module still
-// gives the user a useful, sourced answer by querying real web search results.
+// This module gives the user a useful, sourced answer by querying real web
+// search results even when no LLM is configured (or falls through).
 //
 // Provider order:
-//   1. Google Programmable Search JSON API  (official Google results; needs
-//      GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_CX, free for 100 queries/day).
+//   1. Serper.dev Google Search JSON API    (official Google organic results;
+//      needs SERPER_API_KEY, free for 2,500 queries/month).
 //   2. DuckDuckGo Instant Answer API        (keyless, needs no setup).
 //   3. Wikipedia search API (tr + en)       (keyless, always up, curated).
 //
 // NOTE: scraping google.com/search HTML is NOT used — it violates Google's
-// ToS and breaks constantly. The Programmable Search API is Google's official
-// way to show Google results inside an app.
+// ToS and breaks constantly. Serper.dev is the official-API way to show
+// Google results inside an app.
 //
 // The formatted answer is plain text: a header, then each result as
 // "Title — snippet (domain)". The structured `sources` array is returned
@@ -63,37 +63,22 @@ async function fetchJson(url, opts = {}) {
   return res.json();
 }
 
-// --- 1. Google Programmable Search JSON API ---------------------------------
-async function searchGoogleProgrammable(query, language) {
-  const key = (process.env.GOOGLE_SEARCH_API_KEY || '').trim();
-  const cx = (process.env.GOOGLE_SEARCH_CX || '').trim();
-  if (!key || !cx) return null;
-
-  // Try full query first, then keywords (Google handles both well).
-  const queries = [query];
-  const keywords = extractKeywords(query, language);
-  if (keywords !== query) queries.push(keywords);
-
-  for (const q of queries) {
-    const params = new URLSearchParams({
-      key,
-      cx,
-      q,
-      num: '4',
-      hl: language === 'en' ? 'en' : 'tr',
-      safe: 'active',
-    });
-    const data = await fetchJson(`https://www.googleapis.com/customsearch/v1?${params}`);
-    const items = Array.isArray(data && data.items) ? data.items : [];
-    if (items.length === 0) continue;
+// --- 1. Serper.dev (Google search results, key-only) -------------------------
+async function searchSerperResults(query, language) {
+  try {
+    const { searchSerper } = await import('./services/serperService.js');
+    const items = await searchSerper(query, language);
+    if (!items || items.length === 0) return null;
     return items.map((it) => ({
       title: stripHtml(it.title),
       snippet: stripHtml(it.snippet),
       url: it.link,
       source: domainOf(it.link),
     }));
+  } catch (error) {
+    console.error('[search-answer] serper failed:', error.message);
+    return null;
   }
-  return null;
 }
 
 // --- 2. DuckDuckGo Instant Answer API ---------------------------------------
@@ -296,12 +281,12 @@ function buildAnswerText(results, language) {
  * Try to answer a question from web-search results (no generative AI).
  * @param {string} question
  * @param {'tr'|'en'} language
- * @returns {Promise<{answer:string, provider:'google-search', sources:Array}|null>}
+ * @returns {Promise<{answer:string, provider:'serper', sources:Array}|null>}
  *   null when every provider failed.
  */
 async function getSearchAnswer(question, language = 'tr') {
   const providers = [
-    ['google-search', () => searchGoogleProgrammable(question, language)],
+    ['serper', () => searchSerperResults(question, language)],
     ['duckduckgo', () => searchDuckDuckGo(question)],
     ['wikipedia', () => searchWikipedia(question, language)],
   ];
@@ -312,7 +297,7 @@ async function getSearchAnswer(question, language = 'tr') {
       if (results && results.length > 0) {
         return {
           answer: buildAnswerText(results, language),
-          provider: 'google-search',
+          provider: name,
           sources: results
             .slice(0, 3)
             .map((r) => ({ title: r.title, url: r.url, source: r.source })),

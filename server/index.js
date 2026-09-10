@@ -71,7 +71,7 @@ process.on('unhandledRejection', (reason) => {
 
 // ---------- Rate limiting ----------
 // Simple per-IP sliding window (in-memory). The AI endpoints proxy to
-// quota-limited upstreams (Gemini free tier), so without this a single
+// quota-limited upstreams (Google Custom Search + Groq), so without this a single
 // client could burn the whole day's quota in minutes. 120 req/min is far
 // above what the app itself generates (feed polling ~2 req/min per device).
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -1028,13 +1028,14 @@ app.post('/api/events/notify', async (req, res) => {
 });
 
 // AI: Find the best answer for a community question
-// Answers come from Google Gemini only (free tier via Google AI Studio).
-// Set GEMINI_API_KEY in the server's .env. When Gemini is unavailable
-// (offline / quota / no key) the route responds with success:false and the
-// app shows a friendly "could not generate an answer right now" message.
+// Answers come from the search + Groq LLM pipeline:
+//   1. Serper.dev (SERPER_API_KEY) for real, citable Google web results.
+//   2. Groq (GROQ_API_KEY + GROQ_MODEL) to synthesize a concise,
+//      well-sourced answer from those results.
+// When no GROQ_API_KEY is set, falls back to a plain snippet summary.
 //
-// Overall ceiling for the Gemini call. The per-call Gemini timeout
-// (GEMINI_TIMEOUT_MS, 15s) is already short; this is a safety net so the route
+// Overall ceiling for the whole pipeline call. The per-call Groq timeout
+// (GROQ_TIMEOUT_MS, 15s) is already short; this is a safety net so the route
 // never hangs forever and the app can show its "could not answer" message fast.
 const AI_ANSWER_CEILING_MS = Number(process.env.AI_ANSWER_TIMEOUT_MS || 20000);
 
@@ -1062,7 +1063,7 @@ app.post('/api/ai/answer', async (req, res) => {
     }
 
     // `sources` is present when the answer came from the web-search fallback
-    // (Google Programmable Search / DuckDuckGo / Wikipedia) so the app can
+    // (Serper.dev / DuckDuckGo / Wikipedia) so the app can
     // render the referenced links under the answer.
     res.json({
       success: true,
@@ -1074,16 +1075,6 @@ app.post('/api/ai/answer', async (req, res) => {
         : {}),
     });
   } catch (error) {
-    // Hugging Face 503 = model is warming up (cold start on the free tier).
-    // Signal this explicitly so the client can offer a retry button.
-    if (error && error.isWarmingUp) {
-      console.warn('[ai/answer] Hugging Face model warming up');
-      return res.status(503).json({
-        success: false,
-        error: 'Model warming up',
-        isWarmingUp: true,
-      });
-    }
     console.error('AI answer error:', error.message);
     res.status(500).json({ error: 'Failed to generate answer' });
   }
@@ -1137,9 +1128,66 @@ app.delete('/api/users/:email', requireVerifiedUser, async (req, res) => {
   }
 });
 
-// AI: Web-search answer (no Gemini required)
-// Returns sourced answers from Google Programmable Search / DuckDuckGo /
-// Wikipedia. Used as a fallback when Gemini is unavailable or times out.
+// AI: Search-augmented chat with Groq synthesis + quota-resilient fallback
+// Uses Serper.dev (Google organic results; free tier: 2,500 credits/month) to
+// retrieve real web results, then synthesizes them via Groq (Qwen/Llama family)
+// into a concise, well-sourced answer.
+//
+// Quota resilience: when search is unavailable (Serper quota exhausted, no
+// SERPER_API_KEY, or zero results) the query is sent DIRECTLY to Groq without
+// search context — never a 500.
+// When no GROQ_API_KEY is configured, falls back to a plain-text snippet
+// summary (or a "no relevant sources" message).
+//
+// Env vars required for full pipeline:
+//   SERPER_API_KEY                              (Serper.dev Google search)
+//   GROQ_API_KEY + (optional) GROQ_MODEL       (Groq synthesis)
+//   LLM_TIMEOUT_MS                              (optional, default 15000)
+//
+// The in-memory quota counter resets on server restart. For multi-instance
+// deploys, replace with a shared store (Redis/Firestore).
+//
+app.post('/api/ai/chat', async (req, res) => {
+  const { question, language } = req.body;
+  if (
+    !question ||
+    typeof question !== 'string' ||
+    question.trim().length < 3
+  ) {
+    return res.status(400).json({ error: 'question is required' });
+  }
+  const safeQuestion = question.trim().slice(0, 1000);
+
+  try {
+    const { handleSearchAugmentedChat } = await import('./services/chatPipeline.js');
+    const result = await Promise.race([
+      handleSearchAugmentedChat(safeQuestion, language === 'en' ? 'en' : 'tr'),
+      new Promise((resolve) => setTimeout(() => resolve(null), AI_ANSWER_CEILING_MS)),
+    ]);
+
+    if (!result) {
+      console.error('[ai/chat] timed out after', AI_ANSWER_CEILING_MS, 'ms');
+      return res.status(504).json({ success: false, error: 'AI chat timed out' });
+    }
+
+    res.json({
+      success: true,
+      answer: result.reply,
+      provider: result.provider,
+      sources: result.sources,
+    });
+  } catch (error) {
+    console.error('AI chat error:', error.message);
+    res.status(500).json({ error: 'Failed to generate chat answer' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AI: Web-search answer (no LLM required) — legacy endpoint
+// Returns sourced answers from Serper.dev (Google results) / DuckDuckGo /
+// Wikipedia. Kept for backward compat; prefer /api/ai/chat for the new
+// search + LLM synthesis pipeline.
+// ---------------------------------------------------------------------------
 app.post('/api/ai/search', async (req, res) => {
   const { question, language } = req.body;
   if (

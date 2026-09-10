@@ -36,7 +36,8 @@ console.log(LINE);
 console.log('\n[1] Required secrets');
 const REQUIRED_ENV = [
   ['EXPO_ACCESS_TOKEN', 'push notifications'],
-  ['GEMINI_API_KEY', 'AI Q&A answers (Gemini only)'],
+  ['GROQ_API_KEY', 'AI Q&A answers (Groq + Serper search)'],
+  ['SERPER_API_KEY', 'Serper.dev Google Search (web results)'],
 ];
 for (const [key, purpose] of REQUIRED_ENV) {
   const v = process.env[key];
@@ -44,7 +45,7 @@ for (const [key, purpose] of REQUIRED_ENV) {
   else ok(`${key} present (${purpose})`);
 }
 
-// Google Custom Search is no longer used — Gemini is the only AI provider.
+// Serper.dev (Google results) + Groq are the AI providers.
 // Firebase credentials may arrive as base64 env OR a local key file.
 const fs = require('fs');
 const path = require('path');
@@ -61,9 +62,8 @@ if (!serviceAccount) {
 if (serviceAccount) ok('Firebase service-account credentials resolved');
 else { fail('No Firebase service-account found'); failures++; }
 async function main() {
-  // (No live Google CSE probe: Gemini is the only AI source now, and its
-  //  key presence is verified in [1] above. The separate Google Programmable
-  //  Search path was removed to avoid the key/CX account-pairing fragility.)
+  // (Google Custom Search + Groq are the AI sources now; both keys are
+  //  verified in [1] above. No other legacy provider paths remain.)
 
   // ---------- 2. Firestore persistence -----------------------------------------
   console.log('\n[2] Firestore / persistence');

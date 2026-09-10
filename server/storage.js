@@ -970,6 +970,7 @@ module.exports = {
   updateCommunityComment: (...args) => impl().updateCommunityComment(...args),
   listQAPosts: (...args) => impl().listQAPosts(...args),
   listCommunityPosts: (...args) => impl().listCommunityPosts(...args),
+  getCommunityFeedWithProfileJoin: (...args) => impl().getCommunityFeedWithProfileJoin(...args),
   addReport: (...args) => impl().addReport(...args),
   counts: (...args) => impl().counts(...args),
   getUser: (...args) => impl().getUser(...args),
