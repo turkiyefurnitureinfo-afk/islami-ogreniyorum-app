@@ -79,9 +79,11 @@ export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
 //                                     to GoogleSignin.configure().
 // googleAuth.js tries RELEASE → debug → EAS in order; the client whose SHA-1
 // matches the keystore that signed the installed APK is the one Google accepts.
-export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-3i1aml4qbto4cve3tmi8kjnmrqm0bro3.apps.googleusercontent.com';
-export const GOOGLE_ANDROID_CLIENT_ID_EAS = '817195380589-posfh2h08650q1pmripm3h6g8js7mug2.apps.googleusercontent.com';
-export const GOOGLE_ANDROID_CLIENT_ID_RELEASE = '817195380589-2a0fo0smv7ssunhp82a3dopprdgvpobv.apps.googleusercontent.com'; // Android client for my-upload-key.keystore (SHA-1 6E:8E:23:CA:…) — created when the fingerprint was registered
+export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-8e8k9uure9f7kdban7ms5i18grp9cg92.apps.googleusercontent.com';
+export const GOOGLE_ANDROID_CLIENT_ID_EAS = '817195380589-8e8k9uure9f7kdban7ms5i18grp9cg92.apps.googleusercontent.com'; // EAS build keystore SHA-1 8D:FC:3D:55
+export const GOOGLE_ANDROID_CLIENT_ID_EAS_UPLOAD = '817195380589-snv0bkhtf4mmt5f0ks048hu4pi5rdbrv.apps.googleusercontent.com'; // EAS upload keystore cert hash b30e9592
+export const GOOGLE_ANDROID_CLIENT_ID_RELEASE = '817195380589-93guvjn4ha7u16cijv6bs77iuvnssg16.apps.googleusercontent.com'; // android/app/release.keystore alias release-key SHA-1 7D:85:B8:95:…
+export const GOOGLE_ANDROID_CLIENT_ID_OLDKEY = '817195380589-un8im784hhd3evbvnh8avoejh0pn0ma4.apps.googleusercontent.com'; // old my-upload-key.keystore SHA-1 6E:8E:23:CA:… (kept so old APKs still work)
 // ---------------------------------------------------------------------------
 // GOOGLE ANDROID CLIENT ID FOR THE GOOGLE-PLAY-INSTALLED BUILD
 // ---------------------------------------------------------------------------

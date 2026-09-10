@@ -15,7 +15,8 @@ import {
   GOOGLE_ANDROID_CLIENT_ID,
   GOOGLE_ANDROID_CLIENT_ID_EAS,
   GOOGLE_ANDROID_CLIENT_ID_RELEASE,
-  GOOGLE_ANDROID_CLIENT_ID_PLAY,
+  GOOGLE_ANDROID_CLIENT_ID_EAS_UPLOAD,
+  GOOGLE_ANDROID_CLIENT_ID_OLDKEY,
   GOOGLE_WEB_CLIENT_ID,
 } from './config.js';
 
@@ -174,7 +175,7 @@ function getAndroidClientIds() {
   return [
     // Play App-Signing cert first (matches the Play-installed build). Empty/
     // placeholder ids are filtered out below, so this is inert until a real id is set.
-    GOOGLE_ANDROID_CLIENT_ID_PLAY,
+    GOOGLE_ANDROID_CLIENT_ID_EAS_UPLOAD,
     GOOGLE_ANDROID_CLIENT_ID_RELEASE,
     GOOGLE_ANDROID_CLIENT_ID,
     GOOGLE_ANDROID_CLIENT_ID_EAS,

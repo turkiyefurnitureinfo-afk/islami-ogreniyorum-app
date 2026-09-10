@@ -1356,10 +1356,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
     }
   };
 
-  // AI: generate an answer for a Q&A question from free keyless web search
-  // (Wikipedia + DuckDuckGo) directly on the device. No backend round-trip
-  // and no generative-AI quota: the old Gemini pipeline was retired when its
-  // free-tier tokens ran out; the backend search path remains as a fallback.
+  // AI: generate an answer for a Q&A question. SERVER-FIRST: the backend's
+  // Serper.dev (Google) + Groq synthesis pipeline is the primary source —
+  // the on-device Wikipedia/DuckDuckGo fallback in aiLogic.js runs only when
+  // the server is unreachable. This is why old builds showed
+  // "I could not find a matching wikipedia article" — they never reached
+  // the server pipeline. Always rebuild + reinstall after changing this.
   // questionTextOverride lets the auto-answer flow pass the freshly typed
   // question (state has not re-rendered yet when posting).
   const handleAIAnswer = async (questionId, questionTextOverride) => {
@@ -1374,22 +1376,22 @@ const [profileDirectory, setProfileDirectory] = useState({});
     setQAndA(prev => prev.map(q => sameId(q.id, questionId) ? { ...q, aiAnswerLoading: true, aiError: undefined } : q));
 
     try {
-      // Free keyless web search (Wikipedia + DuckDuckGo), with the backend's
-      // own search pipeline as a secondary fallback path.
+      // Server-first: Serper + Groq synthesis via /api/ai/chat, then legacy
+      // /api/ai/answer, and only then the on-device keyless fallback.
       const data = await getAIAnswer(localQuestion, language);
 
       const aiAnswer = {
         id: Date.now(),
         user: {
           name:
-            data.provider === 'google-search'
+            (data.provider === 'google-search' || data.provider === 'serper')
               ? language === 'tr'
                 ? 'İslamı öğreniyorum Web Arama'
                 : 'I am Learning Islam Web Search'
               : language === 'tr'
                 ? 'İslamı öğreniyorum AI'
                 : 'I am Learning Islam AI',
-          avatar: data.provider === 'google-search' ? '🔎' : '🤖',
+          avatar: (data.provider === 'google-search' || data.provider === 'serper') ? '🔎' : '🤖',
         },
         text: data.answer,
         // Structured links shown under the answer (web-search fallback only).

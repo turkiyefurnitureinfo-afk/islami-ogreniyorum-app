@@ -1,23 +1,22 @@
 // ---------------------------------------------------------------------------
-// Question answering — free, keyless Wikipedia-based search.
+// Question answering — SERVER-FIRST (Serper.dev Google + Groq synthesis).
 // ---------------------------------------------------------------------------
-// Answers are produced WITHOUT any GENERATIVE-AI provider and WITHOUT the
-// DuckDuckGo Instant Answer API (it rarely returned useful content for
-// religious questions). Instead:
+// Priority order in getAIAnswer():
+//   1. Backend /api/ai/chat  — Serper.dev Google results synthesized by Groq
+//      (concise, sourced, conversational Islamic assistant).
+//   2. Backend /api/ai/answer — legacy search pipeline (same server keys).
+//   3. On-device keyless fallback — Wikipedia extracts + DuckDuckGo HTML.
+//      Runs ONLY when the server is unreachable. If you see
+//      "I could not find a matching wikipedia article", the app never
+//      reached the server (old build, offline, or Render sleeping) —
+//      rebuild + reinstall the latest build, then retry on network.
 //
-//   1. Wikipedia is the ONLY answer engine — one keyless MediaWiki request
-//      (generator=search + prop=extracts) finds the article AND returns its
-//      intro paragraph as a real, conversational answer.
-//   2. DuckDuckGo (plus Google, Wikipedia and Diyanet) appear ONLY as
-//      clickable reference links under the answer, so users can deep-dive
-//      their question on the open web.
+// SPEED: server call races a local fallback guard; on-device variants fire
+// in parallel (Promise.allSettled) and the best hit wins.
 //
-// SPEED: multiple keyword variants fire in parallel (Promise.allSettled) and
-// the best hit wins after a single network round-trip (~300-900 ms).
-//
-// No API keys, no server, no credits required. Works on all platforms — RN's
-// fetch has no CORS restrictions on native, and Wikipedia sends permissive
-// CORS headers (`origin=*`) for web builds.
+// No client-side API keys required. Works on all platforms — RN's fetch has
+// no CORS restrictions on native, and Wikipedia sends permissive CORS
+// headers (`origin=*`) for web builds.
 // ---------------------------------------------------------------------------
 
 // Per-request timeout (Wikipedia is fast; this only guards stalled sockets so
@@ -802,16 +801,17 @@ export function isAIConfigured() {
 }
 
 /**
- * Get an answer for a community question.
+ * Get an answer for a community question — SERVER-FIRST.
  *
- * Answers are sourced from a multi-tiered, 100% free web search pipeline:
- *   Tier 1: DuckDuckGo HTML search (real snippet text)
- *   Tier 2: Wikipedia search + intro extracts (encyclopaedic prose)
+ *   Tier 0 (primary): backend /api/ai/chat — Serper.dev Google results
+ *     synthesized by Groq into a concise sourced answer.
+ *   Tier 0b: backend /api/ai/answer — legacy search pipeline.
+ *   Tier 1 (offline fallback only): on-device DuckDuckGo HTML search.
+ *   Tier 2 (offline fallback only): on-device Wikipedia extracts.
  *   Tier 3: Search URL fallback (clickable Google/DDG/Wikipedia/Diyanet links)
  *
- * The previous Gemini-backed pipeline was retired when its free-tier quota ran
- * out. Answers are cached locally in AsyncStorage so repeated questions resolve
- * instantly and search limits aren't burned by other users.
+ * Answers are cached locally in AsyncStorage so repeated questions resolve
+ * instantly and server quota isn't burned by other users.
  *
  * @param {string} question - the user's question
  * @param {'tr'|'en'} language - 'tr' or 'en'
@@ -844,40 +844,40 @@ export async function getAIAnswer(question, language = 'tr') {
   }
 
   // ---------------------------------------------------------------------
-  // PRIMARY SOURCE: free keyless multi-tier web search (DDG → Wikipedia →
-  // search URL fallback). No quota, no key, no server dependency. Runs on
-  // every platform.
+  // PRIMARY SOURCE: backend Serper.dev (Google) + Groq synthesis pipeline.
+  // The server holds SERPER_API_KEY + GROQ_API_KEY, so answers are real,
+  // sourced Google results — NOT bare Wikipedia extracts.
   // ---------------------------------------------------------------------
-  console.log('[AI] Attempting web search answer for:', safeQuestion);
-  try {
-    const webAnswer = await getWebSearchAnswer(safeQuestion, language);
-    if (webAnswer) {
-      console.log('[AI] Web search succeeded, provider:', webAnswer.provider);
-      // Persist the answer locally (fire-and-forget — never block the UI).
-      persistAIAnswer(safeQuestion, webAnswer).catch(() => {});
-      return webAnswer;
-    }
-    console.warn('[AI] Web search returned null/empty');
-  } catch (error) {
-    console.warn('[AI] Web-search answer failed:', error?.message || error);
-  }
-
-  // Secondary: the backend's Hugging Face pipeline (Qwen first, then web
-  // search). Useful when the on-device network path is restricted but the
-  // server can reach out.
-  console.log('[AI] Attempting backend AI fallback (Hugging Face)');
+  console.log('[AI] Attempting server answer (Serper+Groq) for:', safeQuestion);
   try {
     const serverAnswer = await fetchServerAIAnswer(safeQuestion, language);
     if (serverAnswer) {
-      console.log('[AI] Backend AI succeeded, provider:', serverAnswer.provider);
+      console.log('[AI] Server answer succeeded, provider:', serverAnswer.provider);
+      // Persist the answer locally (fire-and-forget — never block the UI).
       persistAIAnswer(safeQuestion, serverAnswer).catch(() => {});
       return serverAnswer;
     }
-    console.warn('[AI] Backend AI returned null/empty');
+    console.warn('[AI] Server answer returned null/empty — falling back to device');
   } catch (error) {
     // Surface the warming-up signal to the caller (don't swallow it).
     if (error.isWarmingUp) throw error;
-    console.warn('[AI] Backend AI fallback failed:', error?.message || error);
+    console.warn('[AI] Server answer failed, falling back to device:', error?.message || error);
+  }
+
+  // Secondary (offline fallback only): free keyless on-device web search
+  // (DDG → Wikipedia → search URL fallback). Runs ONLY when the server is
+  // unreachable (offline / Render sleeping / old deployment).
+  console.log('[AI] Attempting on-device web search fallback for:', safeQuestion);
+  try {
+    const webAnswer = await getWebSearchAnswer(safeQuestion, language);
+    if (webAnswer) {
+      console.log('[AI] On-device search succeeded, provider:', webAnswer.provider);
+      persistAIAnswer(safeQuestion, webAnswer).catch(() => {});
+      return webAnswer;
+    }
+    console.warn('[AI] On-device search returned null/empty');
+  } catch (error) {
+    console.warn('[AI] On-device search failed:', error?.message || error);
   }
 
   // Nothing worked — surface a friendly, actionable message.
@@ -891,10 +891,10 @@ export async function getAIAnswer(question, language = 'tr') {
 }
 
 /**
- * Backend AI fallback: ask our own server (Render) for an answer. The server
- * answers from Hugging Face (Qwen) first, then web-search results. Used as a
- * secondary path when the on-device search cannot reach the internet but the
- * server can.
+ * PRIMARY answer source: ask our own server (Render) for an answer via the
+ * Serper.dev (Google) + Groq synthesis pipeline: POST /api/ai/chat first,
+ * then legacy POST /api/ai/answer. Returns null only when the server is
+ * unreachable so the caller can use the on-device fallback.
  *
  * @param {string} question
  * @param {'tr'|'en'} language
@@ -903,42 +903,49 @@ export async function getAIAnswer(question, language = 'tr') {
  * @throws {{isWarmingUp:boolean}} when the HF model is warming up (HTTP 503).
  */
 async function fetchServerAIAnswer(question, language) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-  try {
-    const resp = await fetch(`${API_URL}/api/ai/answer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, language }),
-      signal: controller.signal,
-    });
-    // Hugging Face 503 = model warming up. Surface this so the UI can retry.
-    if (resp.status === 503) {
-      const data = await resp.json().catch(() => ({}));
-      if (data && data.isWarmingUp) {
-        const err = new Error(data.error || 'Model warming up');
-        err.isWarmingUp = true;
-        throw err;
+  for (const endpoint of ['/api/ai/chat', '/api/ai/answer']) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    try {
+      const resp = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, language }),
+        signal: controller.signal,
+      });
+      // Hugging Face 503 = model warming up. Surface this so the UI can retry.
+      if (resp.status === 503) {
+        const data = await resp.json().catch(() => ({}));
+        if (data && data.isWarmingUp) {
+          const err = new Error(data.error || 'Model warming up');
+          err.isWarmingUp = true;
+          throw err;
+        }
       }
+      if (!resp.ok) continue; // try next endpoint
+      const data = await resp.json().catch(() => null);
+      if (!data || !data.success || !data.answer) continue;
+      return {
+        answer: String(data.answer),
+        provider: data.provider || 'groq',
+        ...(data.model ? { model: data.model } : {}),
+        ...(Array.isArray(data.sources) && data.sources.length > 0
+          ? { sources: data.sources }
+          : {}),
+      };
+    } catch (error) {
+      if (error.isWarmingUp) throw error; // re-throw warming-up signal
+      if (endpoint === '/api/ai/answer') {
+        console.warn('Server AI unavailable:', error?.message || error);
+        return null;
+      }
+      // First endpoint failed (offline / timeout / Render sleeping) — try legacy.
+      console.warn(`Server ${endpoint} failed, trying fallback:`, error?.message || error);
+    } finally {
+      clearTimeout(timer);
     }
-    if (!resp.ok) return null;
-    const data = await resp.json().catch(() => null);
-    if (!data || !data.success || !data.answer) return null;
-    return {
-      answer: String(data.answer),
-      provider: data.provider || 'huggingface',
-      ...(data.model ? { model: data.model } : {}),
-      ...(Array.isArray(data.sources) && data.sources.length > 0
-        ? { sources: data.sources }
-        : {}),
-    };
-  } catch (error) {
-    if (error.isWarmingUp) throw error; // re-throw warming-up signal
-    console.warn('Server AI fallback unavailable:', error?.message || error);
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return null;
 }
 
 /**
