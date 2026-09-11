@@ -50,12 +50,15 @@ export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
 // The previous IDs (984514648281-…) belonged to a DIFFERENT project, so Google
 // rejected every sign-in from the installed APK with "Error 400: invalid_request".
 //
-// Values below mirror the "oauth_client" entries in google-services.json:
-//   - GOOGLE_ANDROID_CLIENT_ID      : Android client registered for the
-//                                     default debug keystore
-//                                     (SHA-1 5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25).
-//   - GOOGLE_ANDROID_CLIENT_ID_EAS  : Android client from an earlier EAS
-//                                     build keystore
+// Values below mirror the "oauth_client" entries in google-services.json
+// (client_type 1 = Android). NOTE: GOOGLE_ANDROID_CLIENT_ID is the SAME client
+// ID as GOOGLE_ANDROID_CLIENT_ID_EAS (…8e8k9uu…) — Firebase registered it for
+// the eas-keystore.jks fingerprint
+// (SHA-1 8D:FC:3D:55:BE:27:5D:81:A1:77:06:4C:93:21:F9:1D:04:B4:49:21), which is
+// the key that signs our production release bundle (gradle.properties ->
+// MYAPP_UPLOAD_STORE_FILE=eas-keystore.jks).
+//   - GOOGLE_ANDROID_CLIENT_ID      : (= GOOGLE_ANDROID_CLIENT_ID_EAS).
+//   - GOOGLE_ANDROID_CLIENT_ID_EAS  : Android client for eas-keystore.jks
 //                                     (SHA-1 8D:FC:3D:55:BE:27:5D:81:A1:77:06:4C:93:21:F9:1D:04:B4:49:21).
 //   - GOOGLE_ANDROID_CLIENT_ID_RELEASE : Android client for the local release
 //                                     keystore android/app/my-upload-key.keystore
@@ -77,8 +80,11 @@ export const SUPPORT_EMAIL = extra.supportEmail || 'info@learningislamapp.com';
 //                                     client whose ID ends in .apps.googleusercontent.com).
 //                                     googleAuth.js passes it as `webClientId`
 //                                     to GoogleSignin.configure().
-// googleAuth.js tries RELEASE → debug → EAS in order; the client whose SHA-1
-// matches the keystore that signed the installed APK is the one Google accepts.
+// googleAuth.js -> resolveAndroidClientId() returns the client whose registered
+// SHA-1 matches the keystore that signs THIS build: EAS (…8e8k9uu…, 8D:FC) first,
+// because gradle.properties MYAPP_UPLOAD_STORE_FILE=eas-keystore.jks signs the
+// release bundle. Google only accepts the client whose SHA-1 equals the signing
+// certificate of the installed build; any other client yields DEVELOPER_ERROR.
 export const GOOGLE_ANDROID_CLIENT_ID = '817195380589-8e8k9uure9f7kdban7ms5i18grp9cg92.apps.googleusercontent.com';
 export const GOOGLE_ANDROID_CLIENT_ID_EAS = '817195380589-8e8k9uure9f7kdban7ms5i18grp9cg92.apps.googleusercontent.com'; // EAS build keystore SHA-1 8D:FC:3D:55
 export const GOOGLE_ANDROID_CLIENT_ID_EAS_UPLOAD = '817195380589-snv0bkhtf4mmt5f0ks048hu4pi5rdbrv.apps.googleusercontent.com'; // EAS upload keystore cert hash b30e9592
@@ -113,12 +119,21 @@ export const GOOGLE_ANDROID_CLIENT_ID_OLDKEY = '817195380589-un8im784hhd3evbvnh8
 //   The 40-hex certificate_hash form of the SHA-1 (what Firebase writes into
 //   google-services.json) is: 841abb8f3f94f814e901d915f97711b96319d66d
 //
-//   ⚠️ DONE (value set below): the Play App-Signing android OAuth client id below is
-//   the one Firebase issued for the fingerprint above (from your updated google-services.json).
-//   Keep GOOGLE_ANDROID_CLIENT_ID_PLAY in sync with the "oauth_client"/"certificate_hash" in
-//   BOTH google-services.json copies (repo root AND android/app/) if you ever re-download them.
-export const GOOGLE_ANDROID_CLIENT_ID_PLAY = '817195380589-m6ar0h19remec01niapgm4i08r17pvm8.apps.googleusercontent.com'; // Android OAuth client for Google Play App Signing key (Firebase-issued; matches android/app/google-services.json)
-export const GOOGLE_WEB_CLIENT_ID = '817195380589-3d5uioh20iaiehr20b7dj9ch76t3jk8r.apps.googleusercontent.com';
+//   ⚠️ NOT REGISTERED IN THE CURRENT google-services.json (verified 2026-09-10):
+//   the client id below was set while the Play App-Signing fingerprint
+//   (SHA-1 84:1A:BB:8F…) was expected in Firebase, but a fresh
+//   google-services.json was downloaded afterwards and it does NOT contain this
+//   client id. Before shipping a Play-signed build:
+//     1) add the Play App-Signing CERT fingerprint (SHA-1 841abb8f… + SHA-256) in
+//        Firebase → Project settings → Your apps,
+//     2) RE-DOWNLOAD google-services.json (repo root AND android/app/),
+//     3) copy the new "Android client ID" Firebase issues for that fingerprint into
+//        GOOGLE_ANDROID_CLIENT_ID_PLAY below, and
+//     4) keep resolveAndroidClientId() in googleAuth.js in sync.
+//   For LOCAL eas-keystore-signed bundles (the current release path) the correct
+//   client is GOOGLE_ANDROID_CLIENT_ID_EAS and PLAY is NOT used.
+export const GOOGLE_ANDROID_CLIENT_ID_PLAY = '817195380589-m6ar0h19remec01niapgm4i08r17pvm8.apps.googleusercontent.com'; // PLACEHOLDER — NOT in the current google-services.json (see comment above)
+export const GOOGLE_WEB_CLIENT_ID = '817195380589-bofg4l9c97uostv2jt51htcuj97v0mnj.apps.googleusercontent.com'; // Recreated 2026-09-11 — old client (…3d5uioh…) was invalidated by a Google Cloud consent-screen change (GMS rejected it with "Invalid audience value")
 
 // ---------------------------------------------------------------------------
 // Security Hardening Configuration

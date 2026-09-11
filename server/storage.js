@@ -11,7 +11,57 @@
  *   qaPosts/{postId}/contributions/{autoId}       -> { userId, text, likes }
  *   communityPosts/{postId}                       -> { ownerUserId }
  *   communityPosts/{postId}/comments/{commentId}  -> { userId }
+ *
+ * === ACTUAL COLLECTION PATH MAP (mobile frontend ↔ Firestore) ========================
+ * The mobile app never calls Firestore directly — it hits REST endpoints on this
+ * server.  Those endpoints are backed by the collections below.  If you write a new
+ * client, cloud function, or onSnapshot listener, use THESE exact paths:
+ *
+ *   Community messages (posts + comments):
+ *     • Top-level posts   → db.collection(C.COMMUNITY_POSTS)
+ *     • Post comments     → db.collection(C.COMMUNITY_POSTS).doc(id).collection(C.COMMUNITY_COMMENTS)
+ *
+ *   User profiles:
+ *     • Profile documents → db.doc('users/' + userId)   /   db.collection(C.USERS).doc(userId)
+ *
+ *   Q&A (separate from community):
+ *     • Questions         → db.collection(C.QA_POSTS)
+ *     • Answers           → db.collection(C.QA_POSTS).doc(id).collection(C.QA_CONTRIBUTIONS)
+ *
+ *   Push / moderation:
+ *     • Device tokens     → db.collection(C.DEVICES)
+ *     • Reports           → db.collection(C.REPORTS)
+ *
+ *   Standard template paths that are NOT used in this project:
+ *     ✗ 'posts'   → replaced by 'communityPosts' (community) + 'qaPosts' (Q&A)
+ *     ✗ 'posts' subcollections are NOT used; comments live under 'communityPosts/{id}/comments'
+ *     ✓ 'users'   → this one IS used (profile documents keyed by user id/email)
+ * =========================================================================================
  */
+
+// ============================================================================
+// Firestore collection path constants — single source of truth.
+// Every .collection() / .doc() reference in this file (and any external
+// cloud-function / onSnapshot listener) MUST use these strings so that
+// real-time listeners never target a stale or template-default collection
+// name (e.g. 'posts' instead of 'communityPosts').
+// ============================================================================
+const C = {
+  // Community feed — top-level posts
+  COMMUNITY_POSTS: 'communityPosts',
+  // Community feed — per-post comment subcollections
+  COMMUNITY_COMMENTS: 'comments',
+  // Q&A feed — questions
+  QA_POSTS: 'qaPosts',
+  // Q&A feed — per-question answer subcollections
+  QA_CONTRIBUTIONS: 'contributions',
+  // Push-device tokens (Expo push notifications)
+  DEVICES: 'devices',
+  // User profile documents (auth-uid / email keyed)
+  USERS: 'users',
+  // Content reports (moderation)
+  REPORTS: 'reports',
+};
 
 const fs = require('fs');
 const path = require('path');
@@ -91,7 +141,7 @@ async function initStorage() {
     // Cheap connectivity check before committing to this backend.
     // Bounded by a timeout so a slow/unreachable network can never hang
     // startup before app.listen (the server would appear dead).
-    const probe = db.collection('devices').limit(1).get();
+    const probe = db.collection(C.DEVICES).limit(1).get();
     const probeTimeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Firestore probe timed out after 8s')), 8000)
     );
@@ -528,22 +578,22 @@ const memImpl = {
 /* ------------------------ Firestore implementation ----------------------- */
 const fsImpl = {
   async getDevice(userId) {
-    const snap = await db.collection('devices').doc(String(userId)).get();
+    const snap = await db.collection(C.DEVICES).doc(String(userId)).get();
     return snap.exists ? snap.data() : null;
   },
   async setDevice(userId, data) {
-    await db.collection('devices').doc(String(userId)).set({ ...data }, { merge: true });
+    await db.collection(C.DEVICES).doc(String(userId)).set({ ...data }, { merge: true });
   },
   async removeDevice(userId) {
-    await db.collection('devices').doc(String(userId)).delete();
+    await db.collection(C.DEVICES).doc(String(userId)).delete();
   },
   async getAllDevices() {
-    const snap = await db.collection('devices').get();
+    const snap = await db.collection(C.DEVICES).get();
     return snap.docs.map((doc) => ({ userId: doc.id, ...doc.data() }));
   },
 
   async createQAPost(ownerUserId, question, authorName, authorAvatar) {
-    const ref = await db.collection('qaPosts').add({
+    const ref = await db.collection(C.QA_POSTS).add({
       ownerUserId,
       question,
       authorName: authorName || null,
@@ -555,14 +605,14 @@ const fsImpl = {
     return ref.id;
   },
   async getQAPost(postId) {
-    const snap = await db.collection('qaPosts').doc(String(postId)).get();
+    const snap = await db.collection(C.QA_POSTS).doc(String(postId)).get();
     return snap.exists ? snap.data() : null;
   },
   async addQAContribution(postId, userId, text, authorName, authorAvatar) {
     const ref = await db
-      .collection('qaPosts')
+      .collection(C.QA_POSTS)
       .doc(String(postId))
-      .collection('contributions')
+      .collection(C.QA_CONTRIBUTIONS)
       .add({
         userId,
         text,
@@ -576,9 +626,9 @@ const fsImpl = {
   },
   async likeQAContribution(postId, contributionId, userId) {
     const ref = db
-      .collection('qaPosts')
+      .collection(C.QA_POSTS)
       .doc(String(postId))
-      .collection('contributions')
+      .collection(C.QA_CONTRIBUTIONS)
       .doc(String(contributionId));
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -594,7 +644,7 @@ const fsImpl = {
     });
   },
   async likeQAQuestion(postId, userId) {
-    const ref = db.collection('qaPosts').doc(String(postId));
+    const ref = db.collection(C.QA_POSTS).doc(String(postId));
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return null;
@@ -609,14 +659,14 @@ const fsImpl = {
     });
   },
   async getQAParticipantUserIds(postId) {
-    const ref = db.collection('qaPosts').doc(String(postId));
+    const ref = db.collection(C.QA_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return [];
     const ids = new Set();
     const data = snap.data();
     if (data.ownerUserId) ids.add(data.ownerUserId);
     // Single sub-collection scan for every prior answerer.
-    const contribsSnap = await ref.collection('contributions').get();
+    const contribsSnap = await ref.collection(C.QA_CONTRIBUTIONS).get();
     for (const doc of contribsSnap.docs) {
       const c = doc.data();
       if (c.userId) ids.add(c.userId);
@@ -626,7 +676,7 @@ const fsImpl = {
 
   async registerCommunityPost(postId, ownerUserId, meta = {}) {
     await db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
       .set(
         {
@@ -642,14 +692,14 @@ const fsImpl = {
       );
   },
   async getCommunityPost(postId) {
-    const snap = await db.collection('communityPosts').doc(String(postId)).get();
+    const snap = await db.collection(C.COMMUNITY_POSTS).doc(String(postId)).get();
     return snap.exists ? snap.data() : null;
   },
   async setCommunityComment(postId, commentId, userId, meta = {}) {
     await db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
-      .collection('comments')
+      .collection(C.COMMUNITY_COMMENTS)
       .doc(String(commentId))
       .set(
         {
@@ -664,15 +714,15 @@ const fsImpl = {
   },
   async getCommunityComment(postId, commentId) {
     const snap = await db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
-      .collection('comments')
+      .collection(C.COMMUNITY_COMMENTS)
       .doc(String(commentId))
       .get();
     return snap.exists ? snap.data() : null;
   },
   async likeCommunityPost(postId, userId) {
-    const ref = db.collection('communityPosts').doc(String(postId));
+    const ref = db.collection(C.COMMUNITY_POSTS).doc(String(postId));
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) return null;
@@ -688,9 +738,9 @@ const fsImpl = {
   },
   async likeCommunityComment(postId, commentId, userId) {
     const ref = db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
-      .collection('comments')
+      .collection(C.COMMUNITY_COMMENTS)
       .doc(String(commentId));
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -706,14 +756,14 @@ const fsImpl = {
     });
   },
   async getCommunityParticipantUserIds(postId) {
-    const ref = db.collection('communityPosts').doc(String(postId));
+    const ref = db.collection(C.COMMUNITY_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return [];
     const ids = new Set();
     const data = snap.data();
     if (data.ownerUserId) ids.add(data.ownerUserId);
     // Single sub-collection scan for every prior commenter.
-    const commentsSnap = await ref.collection('comments').get();
+    const commentsSnap = await ref.collection(C.COMMUNITY_COMMENTS).get();
     for (const doc of commentsSnap.docs) {
       const c = doc.data();
       if (c.userId) ids.add(c.userId);
@@ -722,13 +772,13 @@ const fsImpl = {
   },
   async listQAPosts(limit = 50) {
     const snap = await db
-      .collection('qaPosts')
+      .collection(C.QA_POSTS)
       .orderBy('createdAt', 'desc')
       .limit(limit)
       .get();
     const out = [];
     for (const doc of snap.docs) {
-      const cSnap = await doc.ref.collection('contributions').get();
+      const cSnap = await doc.ref.collection(C.QA_CONTRIBUTIONS).get();
       const contributions = cSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
         // Never expose the AI pseudo-user's answers in the public shared feed
@@ -741,13 +791,13 @@ const fsImpl = {
   },
   async listCommunityPosts(limit = 50) {
     const snap = await db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .orderBy('createdAt', 'desc')
       .limit(limit)
       .get();
     const out = [];
     for (const doc of snap.docs) {
-      const cSnap = await doc.ref.collection('comments').get();
+      const cSnap = await doc.ref.collection(C.COMMUNITY_COMMENTS).get();
       const comments = cSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       out.push({ id: doc.id, ...doc.data(), comments });
     }
@@ -765,7 +815,7 @@ const fsImpl = {
       posts.map(async (post) => {
         if (!post.ownerUserId) return post;
         try {
-          const userSnap = await db.doc(`users/${post.ownerUserId}`).get();
+          const userSnap = await db.doc(`${C.USERS}/${post.ownerUserId}`).get();
           if (userSnap.exists) {
             const user = userSnap.data();
             // Profile photos may be stored under `photoURL` (Firebase Auth
@@ -787,22 +837,22 @@ const fsImpl = {
   },
 
   async deleteQAPost(postId, ownerUserId) {
-    const ref = db.collection('qaPosts').doc(String(postId));
+    const ref = db.collection(C.QA_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return false;
     // Only the owner may delete the thread.
     if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
     // Remove every contribution sub-document first, then the thread itself.
-    const contribs = await ref.collection('contributions').get();
+    const contribs = await ref.collection(C.QA_CONTRIBUTIONS).get();
     await Promise.all(contribs.docs.map((doc) => doc.ref.delete()));
     await ref.delete();
     return true;
   },
   async deleteQAContribution(postId, contributionId, userId) {
     const ref = db
-      .collection('qaPosts')
+      .collection(C.QA_POSTS)
       .doc(String(postId))
-      .collection('contributions')
+      .collection(C.QA_CONTRIBUTIONS)
       .doc(String(contributionId));
     const snap = await ref.get();
     if (!snap.exists) return false;
@@ -814,22 +864,22 @@ const fsImpl = {
     return true;
   },
   async deleteCommunityPost(postId, ownerUserId) {
-    const ref = db.collection('communityPosts').doc(String(postId));
+    const ref = db.collection(C.COMMUNITY_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return false;
     // Only the owner may delete the post.
     if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
     // Remove every comment sub-document first, then the post itself.
-    const comments = await ref.collection('comments').get();
+    const comments = await ref.collection(C.COMMUNITY_COMMENTS).get();
     await Promise.all(comments.docs.map((doc) => doc.ref.delete()));
     await ref.delete();
     return true;
   },
   async deleteCommunityComment(postId, commentId, userId) {
     const ref = db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
-      .collection('comments')
+      .collection(C.COMMUNITY_COMMENTS)
       .doc(String(commentId));
     const snap = await ref.get();
     if (!snap.exists) return false;
@@ -839,7 +889,7 @@ const fsImpl = {
     return true;
   },
   async updateQAPost(postId, ownerUserId, data = {}) {
-    const ref = db.collection('qaPosts').doc(String(postId));
+    const ref = db.collection(C.QA_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return false;
     // Only the owner may update the question.
@@ -853,9 +903,9 @@ const fsImpl = {
   },
   async updateQAContribution(postId, contributionId, userId, text) {
     const ref = db
-      .collection('qaPosts')
+      .collection(C.QA_POSTS)
       .doc(String(postId))
-      .collection('contributions')
+      .collection(C.QA_CONTRIBUTIONS)
       .doc(String(contributionId));
     const snap = await ref.get();
     if (!snap.exists) return false;
@@ -869,7 +919,7 @@ const fsImpl = {
     return true;
   },
   async updateCommunityPost(postId, ownerUserId, text) {
-    const ref = db.collection('communityPosts').doc(String(postId));
+    const ref = db.collection(C.COMMUNITY_POSTS).doc(String(postId));
     const snap = await ref.get();
     if (!snap.exists) return false;
     // Only the owner may update the post.
@@ -881,9 +931,9 @@ const fsImpl = {
   },
   async updateCommunityComment(postId, commentId, userId, text) {
     const ref = db
-      .collection('communityPosts')
+      .collection(C.COMMUNITY_POSTS)
       .doc(String(postId))
-      .collection('comments')
+      .collection(C.COMMUNITY_COMMENTS)
       .doc(String(commentId));
     const snap = await ref.get();
     if (!snap.exists) return false;
@@ -897,9 +947,9 @@ const fsImpl = {
 
   async counts() {
     const [d, p, cp] = await Promise.all([
-      db.collection('devices').count().get(),
-      db.collection('qaPosts').count().get(),
-      db.collection('communityPosts').count().get(),
+      db.collection(C.DEVICES).count().get(),
+      db.collection(C.QA_POSTS).count().get(),
+      db.collection(C.COMMUNITY_POSTS).count().get(),
     ]);
     return {
       devices: d.data().count,
@@ -909,7 +959,7 @@ const fsImpl = {
   },
 
   async addReport(report) {
-    await db.collection('reports').add({
+    await db.collection(C.REPORTS).add({
       ...report,
       createdAt: new Date().toISOString(),
       status: 'open',
@@ -918,18 +968,49 @@ const fsImpl = {
   },
 
   async getUser(id) {
-    const snap = await db.collection('users').doc(String(id)).get();
+    const snap = await db.collection(C.USERS).doc(String(id)).get();
     return snap.exists ? snap.data() : null;
   },
   async setUser(user) {
     await db
-      .collection('users')
+      .collection(C.USERS)
       .doc(String(user.id))
       .set({ ...user }, { merge: true });
     return { ...user };
   },
-  async deleteUser(id) {
-    await db.collection('users').doc(String(id)).delete();
+    async deleteUser(id) {
+    await db.collection(C.USERS).doc(String(id)).delete();
+  },
+
+  /**
+   * Real-time document-creation snapshot listener (safe wrapper around onSnapshot).
+   *
+   * Guards against null / empty collection paths and network errors so callers
+   * never receive broken listeners or unhandled rejections. On error or empty
+   * snapshots the callback receives an empty array.
+   *
+   * @param {string} collectionPath - one of the C.* constants (e.g. C.COMMUNITY_POSTS)
+   * @param {(docs: Array<{id:string, data:object}>) => void} callback
+   * @returns {() => Promise<void>|void} unsubscribe function (no-op-safe)
+   */
+  onCollectionSnapshot(collectionPath, callback) {
+    if (!collectionPath || !db || typeof db.collection !== 'function') {
+      return () => {};
+    }
+    const colRef = db.collection(collectionPath);
+    if (!colRef || typeof colRef.onSnapshot !== 'function') {
+      return () => {};
+    }
+    return colRef.onSnapshot(
+      (snap) => {
+        if (!snap) { callback([]); return; }
+        callback(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() || {}) })));
+      },
+      (error) => {
+        console.warn('[storage] onSnapshot error:', error?.message || error);
+        callback([]);
+      }
+    );
   },
 };
 
@@ -941,6 +1022,7 @@ const impl = () => /** @type {any} */ (mode === 'firestore' ? fsImpl : memImpl);
 
 // Forward every call to the active backend, preserving all arguments.
 module.exports = {
+  C,
   initStorage,
   isFirestoreEnabled: () => mode === 'firestore',
   getDevice: (...args) => impl().getDevice(...args),
@@ -950,7 +1032,7 @@ module.exports = {
   createQAPost: (...args) => impl().createQAPost(...args),
   getQAPost: (...args) => impl().getQAPost(...args),
   addQAContribution: (...args) => impl().addQAContribution(...args),
-    likeQAContribution: (...args) => impl().likeQAContribution(...args),
+  likeQAContribution: (...args) => impl().likeQAContribution(...args),
   likeQAQuestion: (...args) => impl().likeQAQuestion(...args),
   getQAParticipantUserIds: (...args) => impl().getQAParticipantUserIds(...args),
   deleteQAPost: (...args) => impl().deleteQAPost(...args),
@@ -959,7 +1041,7 @@ module.exports = {
   updateQAContribution: (...args) => impl().updateQAContribution(...args),
   registerCommunityPost: (...args) => impl().registerCommunityPost(...args),
   getCommunityPost: (...args) => impl().getCommunityPost(...args),
-    setCommunityComment: (...args) => impl().setCommunityComment(...args),
+  setCommunityComment: (...args) => impl().setCommunityComment(...args),
   getCommunityComment: (...args) => impl().getCommunityComment(...args),
   likeCommunityPost: (...args) => impl().likeCommunityPost(...args),
   likeCommunityComment: (...args) => impl().likeCommunityComment(...args),
@@ -976,4 +1058,10 @@ module.exports = {
   getUser: (...args) => impl().getUser(...args),
   setUser: (...args) => impl().setUser(...args),
   deleteUser: (...args) => impl().deleteUser(...args),
+  onCollectionSnapshot: (...args) => {
+    const active = impl();
+    return typeof active.onCollectionSnapshot === 'function'
+      ? active.onCollectionSnapshot(...args)
+      : () => {};
+  },
 };

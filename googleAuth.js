@@ -85,13 +85,18 @@ const GOOGLE_USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo'
  * ids map 1:1 to the SHA-1 fingerprints registered in google-services.json.
  */
 export function resolveAndroidClientId() {
-  // The debug keystore (SHA-1 5E:8F:16..) -> GOOGLE_ANDROID_CLIENT_ID.
-  // Release keystore (SHA-1 6E:8E:23..) -> ..._RELEASE.
-  // EAS / Google-Play-App-Signing -> ..._EAS / ..._PLAY.
-  // The first non-empty match wins.
-  if (GOOGLE_ANDROID_CLIENT_ID_RELEASE) return GOOGLE_ANDROID_CLIENT_ID_RELEASE;
+  // ⚠️ CRITICAL — Google validates the androidClientId against the SHA-1 of the
+  // certificate that ACTUALLY signed the installed build. `./gradlew
+  // bundleRelease` signs with eas-keystore.jks (MYAPP_UPLOAD_STORE_FILE in
+  // android/gradle.properties), whose SHA-1 is
+  // 8D:FC:3D:55:BE:27:5D:81:A1:77:06:4C:93:21:F9:1D:04:B4:49:21. The only
+  // Android OAuth client registered for that fingerprint in google-services.json
+  // is …8e8k9uu… = GOOGLE_ANDROID_CLIENT_ID_EAS. Passing the RELEASE client
+  // (…93guvjn…, registered for 7D:85:B8:95) while the build is signed with
+  // 8D:FC… is exactly why Google replies DEVELOPER_ERROR (code 10).
   if (GOOGLE_ANDROID_CLIENT_ID_EAS) return GOOGLE_ANDROID_CLIENT_ID_EAS;
-  if (GOOGLE_ANDROID_CLIENT_ID_PLAY) return GOOGLE_ANDROID_CLIENT_ID_PLAY;
+  if (GOOGLE_ANDROID_CLIENT_ID_RELEASE) return GOOGLE_ANDROID_CLIENT_ID_RELEASE;
+  if (GOOGLE_ANDROID_CLIENT_ID_OLDKEY) return GOOGLE_ANDROID_CLIENT_ID_OLDKEY;
   return GOOGLE_ANDROID_CLIENT_ID;
 }
 

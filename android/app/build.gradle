@@ -82,34 +82,18 @@ def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInRelea
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
-    ndkVersion = rootProject.ext.ndkVersion
+    ndkVersion rootProject.ext.ndkVersion
 
-    buildToolsVersion = rootProject.ext.buildToolsVersion
-    compileSdk = rootProject.ext.compileSdkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
 
-    namespace = 'com.joshua.islamiogreniyorum'
-        buildFeatures {
-        buildConfig = true
-    }
-    // Align Java & Kotlin bytecode targets to 17. Expo SDK 53 / expo-dev-menu
-    // ships Compose libraries compiled with Kotlin 2.2.0 metadata that require
-    // a Java 17 source/target. AGP 8.9.1 defaults may otherwise pick a different
-    // target, causing expo-camera / expo-dev-menu Kotlin compilation failures
-    // (e.g. "incompatible class file major version" / metadata version mismatches).
-    // https://github.com/expo/expo/issues/25982
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = '17'
-    }
+    namespace 'com.joshua.islamiogreniyorum'
     defaultConfig {
-        applicationId = 'com.joshua.islamiogreniyorum'
+        applicationId 'com.joshua.islamiogreniyorum'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 24
-        versionName "1.0.3"
+        versionCode 36
+        versionName "1.0.7"
     }
     signingConfigs {
         debug {
@@ -119,63 +103,33 @@ android {
             keyPassword 'android'
         }
         release {
-            // Signing priority (first available wins):
-            //  1. EAS keystore (fetched via scripts/fetch-keystore.js) — matches
-            //     the APK distributed through EAS builds / installed devices.
-            //  2. MYAPP_UPLOAD_* properties (my-release-key.jks) — legacy.
-            //  3. Debug keystore fallback so assembleRelease never hard-fails
-            //     on a fresh checkout.
-            // NOTE: `file()` resolves relative to android/app/, so the store
-            // file property must be a bare filename that lives in android/app/.
-            def easProps = new Properties()
-            def easPropsFile = rootProject.file('eas-credentials.properties')
-            if (easPropsFile.exists()) {
-                easPropsFile.withInputStream { easProps.load(it) }
-            }
-            def easStoreFile = easProps.getProperty('EAS_UPLOAD_STORE_FILE')
-            def easAvailable = easStoreFile && file(easStoreFile).exists()
-            def storeFileName
-            if (easAvailable) {
-                storeFileName = easStoreFile
-                println "Release signing: EAS keystore (${easStoreFile})"
-            } else if (findProperty('MYAPP_UPLOAD_STORE_FILE') && file(findProperty('MYAPP_UPLOAD_STORE_FILE')).exists()) {
-                storeFileName = findProperty('MYAPP_UPLOAD_STORE_FILE')
-                println "Release signing: MYAPP_UPLOAD keystore (${storeFileName})"
-            } else {
-                storeFileName = 'debug.keystore'
-                println 'Release signing: DEBUG keystore fallback (no release keystore found!)'
-            }
-            storeFile file(storeFileName)
-            storePassword (easAvailable
-                ? easProps.getProperty('EAS_UPLOAD_STORE_PASSWORD')
-                : (findProperty('MYAPP_UPLOAD_STORE_PASSWORD') ?: 'android'))
-            keyAlias (easAvailable
-                ? easProps.getProperty('EAS_UPLOAD_KEY_ALIAS')
-                : (findProperty('MYAPP_UPLOAD_KEY_ALIAS') ?: 'androiddebugkey'))
-            keyPassword (easAvailable
-                ? easProps.getProperty('EAS_UPLOAD_KEY_PASSWORD')
-                : (findProperty('MYAPP_UPLOAD_KEY_PASSWORD') ?: 'android'))
+            storeFile file(MYAPP_UPLOAD_STORE_FILE)
+            storePassword MYAPP_UPLOAD_STORE_PASSWORD
+            keyAlias MYAPP_UPLOAD_KEY_ALIAS
+            keyPassword MYAPP_UPLOAD_KEY_PASSWORD
         }
     }
     buildTypes {
         debug {
-            signingConfig = signingConfigs.debug
+            signingConfig signingConfigs.debug
         }
         release {
-            signingConfig = signingConfigs.release
-            shrinkResources = (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
+            // Caution! In production, you need to generate your own keystore file.
+            // see https://reactnative.dev/docs/signed-apk-android.
+            signingConfig signingConfigs.release
+            shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            crunchPngs = (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
+            crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
         }
     }
     packagingOptions {
         jniLibs {
-            useLegacyPackaging = (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
+            useLegacyPackaging (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
         }
     }
     androidResources {
-        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
 }
 

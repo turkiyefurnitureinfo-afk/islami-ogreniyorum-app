@@ -320,6 +320,19 @@ const CommunityTab = ({
             <View style={styles.communityPostMedia}>
               {post.media.type === 'image' ? (
                 (() => {
+                  // BUG FIX: check mediaBroken BEFORE attempting to render.
+                  // Previously this flag was set on image load error but never
+                  // read — causing an infinite re-render loop (image fails →
+                  // onError → setCommunityPosts → re-render → image fails → …).
+                  if (post.mediaBroken) {
+                    return (
+                      <View style={[styles.communityMediaBroken, styles.communityPostImage]}>
+                        <Text style={styles.communityMediaBrokenText}>
+                          {t?.mediaUnavailable || '🖼️ Media unavailable'}
+                        </Text>
+                      </View>
+                    );
+                  }
                   const validUri = validateMediaUrl(post.media.uri);
                   if (!validUri) {
                     return (
@@ -347,10 +360,30 @@ const CommunityTab = ({
                   );
                 })()
               ) : (
-                <View>
-                  <Text style={styles.communityMediaBadge}>🎥 {t?.video || 'Video'}</Text>
-                  <PostVideo uri={post.media.uri} style={styles.communityPostVideo} />
-                </View>
+                // BUG FIX: video URLs now validated the same way as images.
+                // Previously a video with an invalid/relative URI was passed
+                // straight to PostVideo, which would fail silently.
+                (() => {
+                  const validUri = validateMediaUrl(post.media.uri);
+                  if (!validUri) {
+                    return (
+                      <View style={styles.communityPostMedia}>
+                        <Text style={styles.communityMediaBadge}>🎥 {t?.video || 'Video'}</Text>
+                        <View style={[styles.communityMediaBroken, styles.communityPostVideo]}>
+                          <Text style={styles.communityMediaBrokenText}>
+                            {t?.mediaUnavailable || '🖼️ Media unavailable'}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  }
+                  return (
+                    <View>
+                      <Text style={styles.communityMediaBadge}>🎥 {t?.video || 'Video'}</Text>
+                      <PostVideo uri={validUri} style={styles.communityPostVideo} />
+                    </View>
+                  );
+                })()
               )}
             </View>
           )}

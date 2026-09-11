@@ -14,11 +14,3 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
-
-# Release keystore — NEVER commit the keystore binary or your real passwords.
-# The keystore is a one-time local artifact (see android/gradle.properties).
-my-upload-key.keystore
-/app/my-upload-key.keystore
-
-# Kotlin/Native build cache
-.kotlin/

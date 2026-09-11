@@ -68,6 +68,7 @@ async function main() {
   // ---------- 2. Firestore persistence -----------------------------------------
   console.log('\n[2] Firestore / persistence');
   const admin = require('firebase-admin');
+const { C } = require('./storage');
   if (String(process.env.USE_FIRESTORE).toLowerCase() === 'false') {
     warn('USE_FIRESTORE=false -> storing to memory only; set true for persistence.');
   }
@@ -87,7 +88,7 @@ async function main() {
         ? admin.firestore()
         : require('firebase-admin/firestore').getFirestore();
       await Promise.race([
-        db.collection('devices').limit(1).get(),
+        db.collection(C.DEVICES).limit(1).get(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('probe timed out (8s)')), 8000)),
       ]);
       ok('Firestore round-trip OK -> persistence is ACTIVE (not in-memory)');

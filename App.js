@@ -1777,23 +1777,28 @@ const [profileDirectory, setProfileDirectory] = useState({});
         if (data && Array.isArray(data.items)) {
           const serverP = onlyRealUserPosts(
             data.items
-              .map((d) => normalizeServerCommunityPost(d, language))
-              // Normalize media URLs so images/videos render on EVERY device:
-              // the server may hold an absolute https:// URL or, for posts
-              // recorded by older app versions, a relative /uploads/<name>
-              // path that only resolves against the API origin.
-              .map((p) => {
-                if (p.media && p.media.uri && !/^https?:\/\//i.test(p.media.uri)) {
+              // BUG FIX: normalize relative media URLs BEFORE
+              // normalizeServerCommunityPost validates them. Previously this
+              // conversion ran AFTER the normalizer, which had already set
+              // media: null for any non-https URL — making this dead code and
+              // silently stripping media from posts stored by older app
+              // versions (which saved relative /uploads/<name> paths).
+              .map((d) => {
+                if (
+                  d.mediaUri &&
+                  typeof d.mediaUri === 'string' &&
+                  !/^https?:\/\//i.test(d.mediaUri.trim())
+                ) {
                   return {
-                    ...p,
-                    media: {
-                      ...p.media,
-                      uri: p.media.uri.startsWith('/') ? `${API_URL}${p.media.uri}` : p.media.uri,
-                    },
+                    ...d,
+                    mediaUri: d.mediaUri.trim().startsWith('/')
+                      ? `${API_URL}${d.mediaUri.trim()}`
+                      : d.mediaUri.trim(),
                   };
                 }
-                return p;
+                return d;
               })
+              .map((d) => normalizeServerCommunityPost(d, language))
           );
           // Warm the on-disk avatar cache while online so pictures survive offline.
           precacheAvatars([

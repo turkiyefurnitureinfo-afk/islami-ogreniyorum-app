@@ -15,6 +15,7 @@ const fs = require('fs');
 async function main() {
   // --- Load Firebase admin the same way storage.js does ---
   const adminNs = require('firebase-admin');
+const { C } = require('./storage');
 
   let serviceAccount = null;
   const b64 = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
@@ -46,7 +47,7 @@ async function main() {
       : require('firebase-admin/firestore').getFirestore();
 
   console.log('[clear-community] Fetching all community posts...');
-  const postsSnap = await db.collection('communityPosts').get();
+  const postsSnap = await db.collection(C.COMMUNITY_POSTS).get();
   console.log(`[clear-community] Found ${postsSnap.size} community post(s).`);
 
   if (postsSnap.empty) {
@@ -59,7 +60,7 @@ async function main() {
 
   for (const postDoc of postsSnap.docs) {
     // Delete all comments under this post first
-    const commentsSnap = await postDoc.ref.collection('comments').get();
+    const commentsSnap = await postDoc.ref.collection(C.COMMUNITY_COMMENTS).get();
     if (!commentsSnap.empty) {
       const commentDeletes = commentsSnap.docs.map((c) => c.ref.delete());
       await Promise.all(commentDeletes);
