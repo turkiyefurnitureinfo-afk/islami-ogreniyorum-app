@@ -26,6 +26,7 @@ import { makeStyles } from './styles.js';
 import {
   requestNotificationPermissions,
   cancelAllPrayerNotifications,
+  setupNotificationChannel,
   registerPrayerAlarmCancellationHandler,
   sendImmediateNotification,
   scheduleEventNotification,

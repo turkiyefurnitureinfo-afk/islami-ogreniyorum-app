@@ -20,7 +20,7 @@ import { uploadProfileImage } from './mediaService.js';
 import { useCachedAvatar } from './avatarCache.js';
 import { signOutGoogle } from './googleAuth.js';
 import { ALARM_OFFSET_OPTIONS } from './prayerAlarms.js';
-import { formatClock } from './utils.js';
+import { fmt } from './utils.js';
 
 // Avatar for the Edit Profile modal: renders from the on-disk cache first so
 // the picture still shows offline; a neutral placeholder shows when the
@@ -662,9 +662,7 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
           const isSunrise = key === 'sunrise';
           const cfg = entry || { enabled: false, offsetMinutes: 0 };
           const prayerLabel = t && t[key] ? t[key] : key.charAt(0).toUpperCase() + key.slice(1);
-          const displayTime = key === 'sunrise'
-            ? (times && times[key]) ? formatClock(times[key]) : '--:--'
-            : (times && times[key]) ? formatClock(times[key]) : '--:--';
+          const displayTime = (times && Number.isFinite(times[key])) ? fmt(times[key]) : '--:--';
 
           return (
             <View key={key} style={styles.alarmRow}>
