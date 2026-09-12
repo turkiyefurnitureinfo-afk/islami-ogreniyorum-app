@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.joshua.islamiogreniyorum",
-      "versionCode": 38,
+      "versionCode": 39,
       "edgeToEdgeEnabled": true,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
