@@ -2,7 +2,7 @@
 // prayerAlarms.js — alarm-clock-style per-prayer alarm configuration
 // ---------------------------------------------------------------------------
 // A prayer alarm is NOT a global sound choice: each prayer (Fajr, Dhuhr, Asr,
-// Maghrib, Isha) is its own alarm entry, exactly like a clock app:
+// Maghrib, Isha) is its own alarm entry, exactly like a normal clock app:
 //
 //   { fajr:  { enabled: true, offsetMinutes: 0 } }  → rings AT the prayer time
 //   { isha:  { enabled: true, offsetMinutes: 15 } } → rings 15 min BEFORE
@@ -12,13 +12,11 @@
 // display-only and never gets an alarm.
 //
 // Scheduling model (fits expo-notifications' 64-pending-notification limit):
-//   • One DAILY repeating trigger per enabled alarm — rings every day, forever,
-//     with zero rescheduling.
-//   • Plus one-shot "catch-up" rings every 5 min (capped at 30 min) after each
-//     ring for the next 7 days — like a real alarm clock that keeps ringing
-//     until the user turns it off.
-// Tapping any ring (or its ⏹ Stop button) cancels that day's remaining
-// catch-up rings without touching the other prayers.
+//   • One DAILY repeating trigger per enabled alarm — rings every day at the
+//     configured time, forever, with zero rescheduling.
+//   • NO catch-up/prolong rings — the alarm fires once at the configured time
+//     and stops. This is normal alarm clock behavior.
+// Tapping the notification cancels that day's trigger.
 // ---------------------------------------------------------------------------
 
 import { NativeModules, Platform, PermissionsAndroid } from 'react-native';
@@ -30,15 +28,6 @@ export const ALARM_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 /** Offset choices the UI offers, in minutes before the prayer time. */
 export const ALARM_OFFSET_OPTIONS = [0, 5, 10, 15, 20, 30, 45, 60];
-
-/** How many days ahead one-shot "catch-up" rings are pre-scheduled. */
-export const ALARM_DAYS = 7;
-
-/** Minutes between the initial ring and each catch-up ring. */
-export const RING_AGAIN_INTERVAL_MIN = 5;
-
-/** Hard cap: catch-up rings stop this many minutes after the initial ring. */
-export const RING_WINDOW_MIN = 30;
 
 /** Android channel/category ids (v2: fresh ids so new settings always apply). */
 export const ALARM_CHANNEL_ID = 'prayer-alarm-v2';
@@ -89,38 +78,6 @@ export function alarmFireMinutes(prayerTimes, prayerKey, offsetMinutes) {
   const base = prayerTimes ? prayerTimes[prayerKey] : undefined;
   if (!Number.isFinite(base)) return null;
   return Math.max(0, base - (offsetMinutes || 0));
-}
-
-/**
- * Build the notification content for one alarm ring.
- * @param {object} p
- * @param {string} p.prayerLabel  localized prayer name
- * @param {'tr'|'en'} p.language
- * @param {boolean} p.isCatchUp   true for "still ringing" follow-up rings
- * @param {string} p.chainId      id shared by all rings of one occurrence
- */
-export function buildAlarmContent({ prayerLabel, language, isCatchUp, chainId }) {
-  const title = language === 'tr' ? '⏰ Namaz Vakti' : '⏰ Prayer Alarm';
-  const body = isCatchUp
-    ? language === 'tr'
-      ? `${prayerLabel} vakti — kapatmak için dokun`
-      : `Time for ${prayerLabel} — tap to turn off`
-    : language === 'tr'
-      ? `${prayerLabel} namazı vakti geldi`
-      : `It's time for ${prayerLabel} prayer`;
-  return {
-    title,
-    body,
-    // Sound is normally driven by the loud Android alarm channel (bundled
-    // chime), but we ALSO set it on the content itself (extension-less name)
-    // so the chime plays even if a device has a stale channel created with the
-    // old, broken 'notification_high.wav' sound name.
-    sound: HIGH_ALARM_SOUND,
-    channelId: ALARM_CHANNEL_ID,
-    // Shows the ⏹ Stop action button on the notification itself.
-    categoryIdentifier: ALARM_CATEGORY_ID,
-    data: { chainId, kind: 'prayer-alarm' },
-  };
 }
 
 /**
@@ -184,7 +141,7 @@ async function ensureExactAlarmPermission() {
  *   - Full-screen: shows a full-screen intent when it fires
  *   - User-visible: shows in the system alarm clock UI
  */
-async function armNativeAlarm(tsEpochMs, chainId, label, language) {
+async function armNativeAlarm(tsEpochMs, chainId, label) {
   try {
     const Native = NativeModules && NativeModules.AlarmClock;
     if (
@@ -225,7 +182,7 @@ export { ensureExactAlarmPermission };
  * @param {object} p.t            translations (prayer labels)
  * @returns {Promise<number>} how many notifications were scheduled
  */
-export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t }) {
+export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t, notificationSound }) {
   if (Platform.OS !== 'android') return 0;
 
   try {
@@ -242,9 +199,44 @@ export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t })
       );
     }
 
-    // Channels must exist BEFORE scheduling or Android falls back to defaults
-    // (wrong sound / no vibration / no high alarm).
-    await setupAlarmChannel();
+    // Determine which channel to use based on the sound setting
+    const isHighAlarm = /yüksek alarm|high alarm/i.test(notificationSound || '');
+    const channelId = isHighAlarm ? ALARM_CHANNEL_ID : 'prayer-times';
+    
+    // Set up the appropriate channel based on sound preference
+    if (isHighAlarm) {
+      // High alarm channel with bundled chime
+      await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
+        name: 'Namaz Alarmları',
+        description: 'Prayer time alarm: rings at the configured time like a normal alarm clock.',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: HIGH_ALARM_SOUND,
+        vibrationPattern: [0, 500, 250, 500, 250, 500],
+        lightColor: '#d8b56a',
+        enableVibrate: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+      try {
+        await Notifications.setNotificationCategoryAsync(ALARM_CATEGORY_ID, [
+          {
+            identifier: 'turn-off',
+            buttonTitle: '⏹ Kapat / Stop',
+            options: { opensAppToForeground: true },
+          },
+        ]);
+      } catch (error) {
+        console.warn('Could not register alarm category:', error.message);
+      }
+    } else {
+      // Default channel with system sound
+      await Notifications.setNotificationChannelAsync('prayer-times', {
+        name: 'Namaz Vakitleri',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#d8b56a',
+      });
+    }
 
     // Wipe everything previously scheduled (old alarms + legacy schedules).
     await Notifications.cancelAllScheduledNotificationsAsync();
@@ -263,9 +255,20 @@ export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t })
       const label = (t && t[key]) || key;
 
       // 1) DAILY repeating trigger — the alarm fires every day at its time,
-      //    forever, with no rescheduling (this is what makes it robust).
+      //    forever, with no rescheduling. This is NORMAL alarm clock behavior:
+      //    no catch-up / prolong / re-ring — fire once at the configured time.
       await Notifications.scheduleNotificationAsync({
-        content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: false, chainId: `daily-${key}` }),
+        content: {
+          title: language === 'tr' ? 'Namaz Vakti' : 'Prayer Time',
+          body: language === 'tr'
+            ? `${label} namazı vakti geldi`
+            : `It's time for ${label} prayer`,
+          sound: isHighAlarm ? HIGH_ALARM_SOUND : 'default',
+          channelId,
+          // Show stop button only for high alarm mode
+          ...(isHighAlarm ? { categoryIdentifier: ALARM_CATEGORY_ID } : {}),
+          data: { kind: 'prayer-alarm', prayerKey: key, chainId: `daily-${key}` },
+        },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
           hour,
@@ -274,46 +277,18 @@ export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t })
       });
       scheduled += 1;
 
-      // 2) Catch-up rings for the NEXT occurrence only: when the user does not
-      //    dismiss the alarm it rings again every 5 minutes (capped at 30 min).
-      //    Tapping any ring cancels the rest of that occurrence's chain.
-      //    (Only the next occurrence is pre-scheduled — Android caps pending
-      //    notifications at 64; the daily trigger above covers every later day,
-      //    and the app reschedules catch-ups whenever it is opened / times
-      //    change.)
-      const now = Date.now();
-      let nextFire = null;
-      for (let dayOffset = 0; dayOffset <= 1 && !nextFire; dayOffset++) {
-        const fire = new Date();
-        fire.setDate(fire.getDate() + dayOffset);
-        fire.setHours(hour, minute, 0, 0);
-        if (fire.getTime() > now) nextFire = fire;
+      // Optional native AlarmManager.setAlarmClock for guaranteed exact alarm
+      // (full-screen, Doze-exempt). Falls back harmlessly if not available.
+      const fireDate = new Date();
+      fireDate.setHours(hour, minute, 0, 0);
+      if (fireDate.getTime() <= Date.now()) {
+        fireDate.setDate(fireDate.getDate() + 1);
       }
-      if (nextFire) {
-        const chainId = `${key}-${nextFire.getTime()}`;
-        // Cap catch-up rings so total pending notifications never exceeds the
-        // platform limit (iOS allows 64, Android 50). Daily triggers use 5 slots;
-        // reserve room for catch-ups: floor((64 - 5) / 5) = 11 per prayer.
-        const maxCatchUps = Math.min(
-          Math.floor(RING_WINDOW_MIN / RING_AGAIN_INTERVAL_MIN),
-          6 // 30 min / 5 min = 6 catch-ups per prayer occurrence
-        );
-        for (let r = 1; r <= maxCatchUps; r++) {
-          const at = new Date(nextFire.getTime() + r * RING_AGAIN_INTERVAL_MIN * 60000);
-          await Notifications.scheduleNotificationAsync({
-            content: buildAlarmContent({ prayerLabel: label, language, isCatchUp: true, chainId }),
-            trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
-          });
-          scheduled += 1;
-        }
-        // Optional native AlarmManager.setAlarmClock for the NEXT occurrence (guaranteed
-        // full-screen + exact + Doze-exempt). Falls back harmlessly if not built in / throws.
-        await armNativeAlarm(
-          nextFire.getTime(),
-          `native-${key}-${nextFire.getTime()}`,
-          label
-        );
-      }
+      await armNativeAlarm(
+        fireDate.getTime(),
+        `native-${key}-${fireDate.getTime()}`,
+        label
+      );
     }
     return scheduled;
   } catch (error) {
@@ -327,8 +302,8 @@ export async function schedulePrayerAlarms({ alarms, prayerTimes, language, t })
 
 /**
  * Cancel every pending notification in one alarm chain (a single prayer
- * occurrence's catch-up rings). Called when a ring is tapped/stopped.
- * @param {string} chainId - e.g. 'fajr-1735689600000'
+ * occurrence). Called when a ring is tapped/stopped.
+ * @param {string} chainId - e.g. 'daily-fajr'
  */
 export async function cancelAlarmChain(chainId) {
   if (!chainId) return;
@@ -346,8 +321,7 @@ export async function cancelAlarmChain(chainId) {
 
 /**
  * Handler that stops a ringing alarm: any interaction with a prayer-alarm
- * notification (tap or ⏹ Stop) cancels that occurrence's remaining catch-up
- * rings. Other prayers are never affected.
+ * notification (tap or ⏹ Stop) cancels that alarm. Other prayers are never affected.
  * @returns {object} subscription — call .remove() on cleanup
  */
 export function registerAlarmStopHandler() {
@@ -359,38 +333,4 @@ export function registerAlarmStopHandler() {
       cancelAlarmChain(data.chainId);
     }
   });
-}
-
-/**
- * Ensure the loud alarm channel + stop-action category exist.
- * Uses a NEW channel id ("prayer-alarm-v2") because Android freezes channel
- * settings at creation — devices that already have the legacy channel keep its
- * old (possibly wrong) settings, so a fresh id guarantees correct behaviour.
- */
-export async function setupAlarmChannel() {
-  if (Platform.OS !== 'android') return;
-  // Request exact-alarm permission before creating the channel so alarms fire
-  // precisely on time, even in Doze mode or when the app is closed.
-  await ensureExactAlarmPermission();
-  await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
-    name: 'Namaz Alarmları',
-    description: 'Prayer time alarms — rings like an alarm clock until turned off.',
-    importance: Notifications.AndroidImportance.HIGH,
-    sound: HIGH_ALARM_SOUND,
-    vibrationPattern: [0, 500, 250, 500, 250, 500],
-    lightColor: '#d8b56a',
-    enableVibrate: true,
-    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-  });
-  try {
-    await Notifications.setNotificationCategoryAsync(ALARM_CATEGORY_ID, [
-      {
-        identifier: 'turn-off',
-        buttonTitle: '⏹ Kapat / Stop',
-        options: { opensAppToForeground: true },
-      },
-    ]);
-  } catch (error) {
-    console.warn('Could not register alarm category:', error.message);
-  }
 }

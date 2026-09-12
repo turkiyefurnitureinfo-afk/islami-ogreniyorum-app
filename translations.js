@@ -99,6 +99,9 @@ export const translations = {
     confirmNewPassword: 'Yeni Şifre (Tekrar)',
     changePasswordTitle: 'Şifreyi Değiştir',
     changePasswordMessage: 'Güvenlik için mevcut şifrenizi girin, ardından yeni şifrenizi oluşturun.',
+    prayerAlarms: 'Namaz Alarmları',
+    alarmTimers: 'Alarm Zamanlayıcıları',
+    displayOnly: 'Sadece Gösterim',
     passwordChanged: 'Şifreniz başarıyla güncellendi.',
     profileUpdated: 'Profiliniz başarıyla güncellendi.',
     emailUpdated: 'E-posta adresiniz başarıyla güncellendi.',
@@ -445,5 +448,10 @@ export const translations = {
     translatedFromEn: 'Translated from English',
     showOriginal: 'Show original',
     tapToRetry: 'tap to retry',
+
+    // Alarm settings
+    prayerAlarms: 'Prayer Alarms',
+    alarmTimers: 'Alarm Timers',
+    displayOnly: 'Display Only',
   },
 };

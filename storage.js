@@ -4,16 +4,30 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // =============
 // The storage split is now:
 //   PHONE ONLY (AsyncStorage): settings, prayerAlarms, welcomeShown,
-//     deletedItems, profileDirectory (cache), qanda/community (offline cache)
+//     deletedItems, profileDirectory (cache), qanda/community (offline cache),
+//     accountCache (local cache of Firebase account for faster startup)
 //   CLOUD (backend): user account, profile (occupation/address/bio/picture),
 //     Q&A content, community content
 //
 // Q&A and community posts are kept on the phone as a FAST OFFLINE CACHE so
 // the feed renders instantly on launch. The cloud copy (written via
 // cloudSync.js) is authoritative and survives logout / uninstall.
+//
+// IMPORTANT: All data stored in AsyncStorage is LOCAL TO THE PHONE and will be
+// automatically wiped when the user uninstalls the app. This is the expected
+// behavior - user settings, alarms, and cached data are device-specific.
+// User account and profile data stored in the cloud (Firebase + backend server)
+// will survive uninstallation and be re-synced when the user logs in again.
+//
+// Data persistence summary:
+//   - Profile data (occupation, address, bio, picture): Cloud (survives uninstall)
+//   - Settings (theme, language, notifications, alarms): Phone only (cleared on uninstall)
+//   - Q&A tab data: Phone cache + Cloud (cloud survives uninstall)
+//   - Community tab data: Phone cache + Cloud (cloud survives uninstall)
+//   - Setting tab data: Phone only (cleared on uninstall, re-saved on next login)
+//   - Account cache: Phone only (fast startup + offline fallback, re-synced on login)
 const KEYS = {
-  ACCOUNT: '@app/account',
-  PROFILE: '@app/profile',
+  ACCOUNT_CACHE: '@app/account_cache',  // Local cache of Firebase account (for fast startup)
   SETTINGS: '@app/settings',
   WELCOME_SHOWN: '@app/welcome_shown',
   QANDA: '@app/qanda',
@@ -23,105 +37,52 @@ const KEYS = {
 };
 
 /**
- * Save the user's account data (email, name, etc.)
+ * Save the user's account data to local cache for fast startup.
+ * This is a LOCAL CACHE only - the authoritative account data comes from Firebase Auth.
+ * @param {object} account - { email, fullName, profilePicture, uid, authProvider }
  */
-export async function saveAccount(account) {
+export async function saveAccountCache(account) {
   try {
-    await AsyncStorage.setItem(KEYS.ACCOUNT, JSON.stringify(account));
+    await AsyncStorage.setItem(KEYS.ACCOUNT_CACHE, JSON.stringify(account));
   } catch (error) {
-    console.error('Failed to save account:', error);
+    console.error('Failed to save account cache:', error);
   }
 }
 
 /**
- * Load the user's account data.
+ * Load the cached account data (for fast startup / offline fallback).
  * @returns {Promise<object|null>}
  */
-export async function loadAccount() {
+export async function loadAccountCache() {
   try {
-    const raw = await AsyncStorage.getItem(KEYS.ACCOUNT);
+    const raw = await AsyncStorage.getItem(KEYS.ACCOUNT_CACHE);
     return raw ? JSON.parse(raw) : null;
   } catch (error) {
-    console.error('Failed to load account:', error);
+    console.error('Failed to load account cache:', error);
     return null;
   }
 }
 
 /**
- * Clear the user's account data (used on logout / account deletion).
+ * Clear the account cache (used on logout).
  */
-export async function clearAccount() {
+export async function clearAccountCache() {
   try {
-    await AsyncStorage.removeItem(KEYS.ACCOUNT);
+    await AsyncStorage.removeItem(KEYS.ACCOUNT_CACHE);
   } catch (error) {
-    console.error('Failed to clear account:', error);
-  }
-}
-
-/**
- * Save profile setup data (occupation, address, bio, profile picture).
- */
-export async function saveProfile(profile) {
-  try {
-    await AsyncStorage.setItem(KEYS.PROFILE, JSON.stringify(profile));
-  } catch (error) {
-    console.error('Failed to save profile:', error);
-  }
-}
-
-/**
- * Load profile setup data.
- * @returns {Promise<object|null>}
- */
-export async function loadProfile() {
-  try {
-    const raw = await AsyncStorage.getItem(KEYS.PROFILE);
-    return raw ? JSON.parse(raw) : null;
-  } catch (error) {
-    console.error('Failed to load profile:', error);
-    return null;
+    console.error('Failed to clear account cache:', error);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Per-email profile storage — occupation / address / bio / picture are kept
-// under "@app/profile:<email>" so multiple accounts on one device each get
-// their own profile (the legacy single-key PROFILE remains as a fallback for
-// data written by older builds).
+// Profile directory — the best-known profile (name + picture) per email.
+// Used so the community feed shows the user's CURRENT profile picture, not the
+// one embedded in their (older) posts. Entries are refreshed from the backend
+// after feed syncs; the signed-in user's own entry always comes live from
+// account state, so their edits reflect instantly everywhere.
+//
+// Shape: { [email]: { fullName: string, profilePicture: string, fetchedAt: ISO } }
 // ---------------------------------------------------------------------------
-
-const profileKeyFor = (email) => `${KEYS.PROFILE}:${String(email || '').trim().toLowerCase()}`;
-
-/**
- * Save profile setup data for a specific account email.
- * @param {string} email - the account's email (storage key)
- * @param {object} profile - { occupation, address, bio, profilePicture }
- */
-export async function saveProfileForEmail(email, profile) {
-  try {
-    await AsyncStorage.setItem(profileKeyFor(email), JSON.stringify(profile || {}));
-  } catch (error) {
-    console.error('Failed to save profile for email:', error);
-  }
-}
-
-/**
- * Load profile setup data for a specific account email. Falls back to the
- * legacy single-profile record when no per-email entry exists yet (migration).
- * @param {string} email - the account's email (storage key)
- * @returns {Promise<object|null>}
- */
-export async function loadProfileForEmail(email) {
-  try {
-    const raw = await AsyncStorage.getItem(profileKeyFor(email));
-    if (raw) return JSON.parse(raw);
-    // Migration: return the legacy profile (if any) without removing it.
-    return await loadProfile();
-  } catch (error) {
-    console.error('Failed to load profile for email:', error);
-    return null;
-  }
-}
 
 /**
  * Profile directory — the best-known profile (name + picture) per email.
@@ -292,8 +253,7 @@ export async function loadDeletedItems() {
 export async function clearAllData() {
   try {
     await AsyncStorage.multiRemove([
-      KEYS.ACCOUNT,
-      KEYS.PROFILE,
+      KEYS.ACCOUNT_CACHE,
       KEYS.SETTINGS,
       KEYS.WELCOME_SHOWN,
       KEYS.QANDA,

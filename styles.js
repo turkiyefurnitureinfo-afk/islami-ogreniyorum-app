@@ -1456,5 +1456,68 @@ export function makeStyles(palette) {
       fontSize: 13,
       flex: 1,
     },
+
+    // ---------- Alarm Settings (SettingsTab) ----------
+    alarmRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: palette.border,
+    },
+    alarmInfo: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      flex: 1,
+    },
+    alarmPrayerName: {
+      color: palette.text,
+      fontSize: 16,
+      fontWeight: '600',
+      width: 80,
+    },
+    alarmTime: {
+      color: palette.primary,
+      fontSize: 16,
+      fontWeight: '700',
+      fontVariant: ['tabular-nums'],
+    },
+    alarmDisabled: {
+      color: palette.muted,
+      fontSize: 12,
+      fontStyle: 'italic',
+    },
+    alarmControls: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    offsetSelector: {
+      flexDirection: 'row',
+      gap: 4,
+      marginLeft: 4,
+    },
+    offsetChip: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 12,
+      backgroundColor: palette.panel,
+      borderWidth: 1,
+      borderColor: palette.border,
+    },
+    offsetChipActive: {
+      backgroundColor: palette.primary,
+      borderColor: palette.primary,
+    },
+    offsetChipText: {
+      fontSize: 10,
+      color: palette.muted,
+    },
+    offsetChipTextActive: {
+      color: '#ffffff',
+      fontWeight: '600',
+    },
   };
 }

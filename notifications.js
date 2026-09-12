@@ -34,9 +34,9 @@ try {
 // like 'Çan' / 'Bell' still work -- they behave like System Default):
 //
 //   'Yüksek Alarm (30 dk)' / 'High Alarm (up to 30 min)'
-//       -> loud bundled chime on a dedicated alarm channel, and the
-//          notification RE-RINGS every 5 minutes until the user taps it
-//          (which cancels the rest of the chain) or 30 minutes pass.
+//       -> loud bundled chime on a dedicated alarm channel.
+//          The alarm fires once at the configured prayer time like a normal
+//          alarm clock. No re-rining or prolong ringing.
 //   'Sistem Varsayılanı' / 'System Default' (+ legacy names)
 //       -> standard single system notification sound.
 //   'Sessiz' / 'Silent'
@@ -53,9 +53,6 @@ export const HIGH_ALARM_SOUND = 'notification_high';
 const ALARM_CHANNEL_ID = 'prayer-alarm';
 const DEFAULT_CHANNEL_ID = 'prayer-times';
 const COMMUNITY_CHANNEL_ID = 'community-activity';
-const REMINDER_INTERVAL_MIN = 5;   // re-ring cadence inside the alarm window
-const RING_WINDOW_MIN = 30;        // hard cap requested: stop after 30 minutes
-const ALARM_DAYS = 7;              // how many days ahead to pre-schedule chains
 
 function resolveSoundMode(soundOption) {
   const s = String(soundOption || '');
@@ -292,8 +289,6 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
 
   const mode = resolveSoundMode(sound);
   const title = language === 'tr' ? 'Namaz Vakti' : 'Prayer Time';
-  const reminderSuffix =
-    language === 'tr' ? ' — hatırlatma ⏰' : ' — reminder ⏰';
 
   const buildContent = (body, chainId) => ({
     title,
@@ -314,14 +309,11 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
     data: chainId ? { chainId } : undefined,
   });
 
-  // --- ALARM MODE: concrete chains for the next days -----------------------
-  // Each prayer gets an independent ring sequence: rings at prayer time,
-  // then again every REMINDER_INTERVAL_MIN minutes until RING_WINDOW_MIN
-  // (hard cap 30 min). When the user dismisses the alarm (tap or the
-  // ⏹ Kapat / Stop button), the remaining rings OF THAT PRAYER are cancelled
-  // -- silence until the next prayer time. Other prayers are never affected.
+  // --- ALARM MODE: daily repeating triggers only ----------------------------
+  // Each prayer gets one DAILY repeating trigger: rings every day at the
+  // configured time, like a normal alarm clock. No catch-up / prolong / re-ring
+  // — the alarm fires once and stops (user can dismiss or it auto-clears).
   if (mode === 'alarm') {
-    const now = new Date();
     let scheduled = 0;
 
     for (const prayer of prayers) {
@@ -329,40 +321,24 @@ export async function schedulePrayerNotifications({ times, language, sound, t })
       const hour = Math.floor(minutes / 60);
       const minute = Math.floor(minutes % 60);
 
-      for (let dayOffset = 0; dayOffset < ALARM_DAYS; dayOffset++) {
-        const fire = new Date(now);
-        fire.setDate(fire.getDate() + dayOffset);
-        fire.setHours(hour, minute, 0, 0);
-        if (fire.getTime() <= now.getTime()) continue; // already passed today
+      const body =
+        language === 'tr'
+          ? `${prayer.label} namazı vakti geldi`
+          : `It's time for ${prayer.label} prayer`;
+      const chainId = `daily-${prayer.key}`;
 
-        const body =
-          language === 'tr'
-            ? `${prayer.label} namazı vakti geldi`
-            : `It's time for ${prayer.label} prayer`;
-        const chainId = `${prayer.key}-${fire.getTime()}`;
-
-        // Initial ring at prayer time
-        await Notifications.scheduleNotificationAsync({
-          content: buildContent(body, chainId),
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fire },
-        });
-        scheduled++;
-
-        // Follow-up rings (user tap cancels these; hard cap at 30 min)
-        const reminderCount = Math.floor(RING_WINDOW_MIN / REMINDER_INTERVAL_MIN);
-        for (let r = 1; r <= reminderCount; r++) {
-          const at = new Date(fire.getTime() + r * REMINDER_INTERVAL_MIN * 60000);
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              ...buildContent(body + reminderSuffix, chainId),
-              title,
-            },
-            trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
-          });
-          scheduled++;
-        }
-      }
+      // Daily repeating trigger — normal alarm clock behavior
+      await Notifications.scheduleNotificationAsync({
+        content: buildContent(body, chainId),
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          hour,
+          minute,
+        },
+      });
+      scheduled++;
     }
+
     return scheduled;
   }
 
@@ -472,9 +448,9 @@ export async function setupNotificationChannel() {
     // Loud alarm channel used by "Yüksek Alarm / High Alarm" -- plays the
     // bundled chime with a strong vibration pattern so it clearly stands out.
     await Notifications.setNotificationChannelAsync(ALARM_CHANNEL_ID, {
-      name: 'Namaz Alarmları (yüksek ses)',
+      name: 'Namaz Alarmları',
       description:
-        'Prayer time alarm: rings loudly and re-rings until turned off or 30 minutes pass.',
+        'Prayer time alarm: rings at the configured time like a normal alarm clock.',
       importance: Notifications.AndroidImportance.HIGH,
       sound: HIGH_ALARM_SOUND,
       vibrationPattern: [0, 500, 250, 500, 250, 500],

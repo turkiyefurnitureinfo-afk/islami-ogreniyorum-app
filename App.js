@@ -26,8 +26,6 @@ import { makeStyles } from './styles.js';
 import {
   requestNotificationPermissions,
   cancelAllPrayerNotifications,
-  schedulePrayerNotifications,
-  setupNotificationChannel,
   registerPrayerAlarmCancellationHandler,
   sendImmediateNotification,
   scheduleEventNotification,
@@ -75,6 +73,9 @@ import {
   loadDeletedItems,
   loadProfileDirectory,
   saveProfileDirectory,
+  saveAccountCache,
+  loadAccountCache,
+  clearAccountCache,
 } from './storage.js';
 import PrayerTab from './PrayerTab.js';
 import QATab from './QATab.js';
@@ -221,7 +222,9 @@ const [profileDirectory, setProfileDirectory] = useState({});
             authProvider: 'firebase',
           };
           setAccount(merged);
-          
+          // Save to local cache for fast startup on next launch
+          saveAccountCache(merged);
+
           if (serverUser) {
             setProfilePicture(serverUser.profilePicture || '');
             setOccupation(serverUser.occupation || '');
@@ -232,16 +235,26 @@ const [profileDirectory, setProfileDirectory] = useState({});
           }
         } catch (_e) {
           // Offline - set basic account from Firebase user
-          setAccount({
+          const offlineAccount = {
             email: user.email?.toLowerCase() || '',
             fullName: user.displayName || '',
             password: '',
             profilePicture: user.photoURL || '',
             uid: user.uid,
             authProvider: 'firebase',
-          });
+          };
+          setAccount(offlineAccount);
+          // Save to local cache for fast startup on next launch
+          saveAccountCache(offlineAccount);
         }
       }
+      // Try to load cached account data for faster startup (offline fallback)
+      const cachedAccount = await loadAccountCache();
+      if (cachedAccount && !signedIn) {
+        // Use cached data for immediate UI render, but wait for Firebase to confirm
+        setAccount(cachedAccount);
+      }
+
       // No local account loading - everything comes from cloud
 
       const savedSettings = await loadSettings();
@@ -481,8 +494,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
   }, []);
 
   // Alarm-clock stop handler: dismissing any prayer alarm (tap or ⏹ Kapat /
-  // Stop button) cancels the remaining catch-up rings FOR THAT occurrence only.
-  // Other prayers are never affected.
+  // Stop button) cancels that alarm. Other prayers are never affected.
   useEffect(() => {
     const subscription = registerAlarmStopHandler();
     return () => subscription.remove();
@@ -535,7 +547,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
     ensureExactAlarmPermission().catch(() => {});
 
     const attemptRegistration = (attempt) => {
-      registerDeviceWithBackend(account.email, account.fullName)
+      registerDeviceWithBackend(account.email, account.email, account.fullName)
         .then((ok) => {
           // Retry up to 3 times with backoff on failure (network blips at launch).
           if (!ok && attempt < 3) {
@@ -563,9 +575,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
         return;
       }
 
-      // Channels must exist BEFORE we schedule, otherwise Android falls back
-      // to the default channel (wrong sound / no vibration / no high alarm).
-      await setupNotificationChannel();
+      // Request notification permission before scheduling
       const granted = await requestNotificationPermissions();
       if (!granted) {
         if (isActive) setNotificationsOn(false);
@@ -586,13 +596,15 @@ const [profileDirectory, setProfileDirectory] = useState({});
         : computeTimes(today, city.lat, city.lng, city.tz, prayerMethod);
 
       // Alarm-clock style: each prayer has its own on/off + "minutes before"
-      // entry, and every ring uses the loud alarm channel. The scheduler wipes
-      // all previously scheduled prayers and re-creates them from this config.
+      // entry. The scheduler uses the user's sound preference to determine
+      // whether to use the high alarm sound or system default. The scheduler
+      // wipes all previously scheduled prayers and re-creates them from this config.
       await schedulePrayerAlarms({
         alarms: prayerAlarms,
         prayerTimes: todayTimes,
         language,
         t,
+        notificationSound,
       });
 
       // Legacy event reminders (upcoming events) still use the standard
@@ -836,7 +848,8 @@ const [profileDirectory, setProfileDirectory] = useState({});
           };
           setAccount(accountToSave);
           setSignedIn(true);
-          // Do NOT save account locally - it's stored in the cloud
+          // Save to local cache for fast startup on next launch
+          saveAccountCache(accountToSave);
 
           // Mirror the account on the backend so it survives reinstalls.
           registerUserProfile(accountToSave.email, accountToSave.fullName, null, accountToSave.profilePicture || null);
@@ -849,7 +862,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
           }).catch(() => {});
 
           // Register this device with the push notification backend
-          registerDeviceWithBackend(accountToSave.email, accountToSave.fullName);
+          registerDeviceWithBackend(accountToSave.email, accountToSave.email, accountToSave.fullName);
         }
       } catch (error) {
         // Belt-and-braces: some stacks do surface email-already-in-use.
@@ -888,7 +901,8 @@ const [profileDirectory, setProfileDirectory] = useState({});
         };
         setAccount(merged);
         setSignedIn(true);
-        // Do NOT save account locally - it's stored in the cloud
+        // Save to local cache for fast startup on next launch
+        saveAccountCache(merged);
         
         // Set profile data from cloud
         if (serverUser) {
@@ -986,6 +1000,8 @@ const [profileDirectory, setProfileDirectory] = useState({});
       authProvider: 'google',
     };
     setAccount(googleAccount);
+    // Save to local cache for fast startup on next launch
+    saveAccountCache(googleAccount);
 
     // Use the profile picture (Google photo now lives on the Firebase user).
     setProfilePicture(googleAccount.profilePicture);
@@ -993,7 +1009,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
     setSignedIn(true);
     setIsNewUser(false);
     setProfileSetupComplete(true);
-    // Do NOT save account locally - it's stored in the cloud
 
     // Mirror the Google account on the backend (best-effort). The Firebase ID
     // token is attached automatically by the register/verify layer, so the
@@ -1009,7 +1024,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
     // Register this device with the push notification backend (now works —
     // the user has a real Firebase session).
-    registerDeviceWithBackend(googleAccount.email, googleAccount.fullName);
+    registerDeviceWithBackend(googleAccount.email, googleAccount.email, googleAccount.fullName);
   };
 
   const handleGoogleSignIn = async () => {
@@ -1106,12 +1121,13 @@ const [profileDirectory, setProfileDirectory] = useState({});
         profilePicture: serverUser?.profilePicture || user.photoURL || profilePicture || '',
       };
       setAccount(emailLinkAccount);
+      // Save to local cache for fast startup on next launch
+      saveAccountCache(emailLinkAccount);
       setProfilePicture(serverUser?.profilePicture || user.photoURL || profilePicture);
       setSignedIn(true);
       setIsNewUser(false);
       setProfileSetupComplete(true);
       setIsGoogleUser(false);
-      // Do NOT save account locally - it's stored in the cloud
       
       // Set profile data from cloud
       if (serverUser) {
@@ -1127,7 +1143,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
         address: '',
         bio: '',
       }).catch(() => {});
-      registerDeviceWithBackend(user.email || email, user.displayName || account.fullName);
+      registerDeviceWithBackend(user.email || email, user.email || email, user.displayName || account.fullName);
       setEmailLinkPending(false);
       setEmailLinkSent(false);
       return true;
@@ -2319,7 +2335,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
             onRefresh={handleManualRefresh}
           />
         )}
-        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} isGoogleUser={isGoogleUser} setIsGoogleUser={setIsGoogleUser} setSignedIn={setSignedIn} profilePicture={profilePicture} setProfilePicture={setProfilePicture} setOccupation={setOccupation} setAddress={setAddress} setBio={setBio} />}
+        {activeTab === 'settings' && <SettingsTab styles={styles} t={t} theme={theme} setTheme={setTheme} language={language} setLanguage={setLanguage} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} soundOptions={soundOptions} notificationSound={notificationSound} setNotificationSound={setNotificationSound} prayerMethod={prayerMethod} setPrayerMethod={setPrayerMethod} prayerSourceLabel={prayerSourceLabel} account={account} setAccount={setAccount} isGoogleUser={isGoogleUser} setIsGoogleUser={setIsGoogleUser} setSignedIn={setSignedIn} profilePicture={profilePicture} setProfilePicture={setProfilePicture} setOccupation={setOccupation} setAddress={setAddress} setBio={setBio} prayerAlarms={prayerAlarms} setPrayerAlarms={setPrayerAlarms} times={times} />}
       </View>
     </SafeAreaView>
   );
