@@ -110,6 +110,11 @@ function rateLimit(req, res, next) {
 }
 app.use(rateLimit);
 
+// Android notification channel id for community/Q&A activity.
+// The client defines the matching channel name in notifications.js; both
+// sides MUST agree or push messages will land on the default channel.
+const COMMUNITY_CHANNEL_ID = 'community-activity';
+
 // Initialize Expo push notification client
 // Set EXPO_ACCESS_TOKEN in your .env file (get it from https://expo.dev/settings/access-tokens)
 const expo = new Expo({

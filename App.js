@@ -920,7 +920,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
           address: '',
           bio: '',
         }).catch(() => {});
-        registerDeviceWithBackend(merged.email, merged.fullName);
+                registerDeviceWithBackend(merged.email, merged.email, merged.fullName);
       } catch (error) {
         Alert.alert(
           t.invalidLogin || 'Login failed',
