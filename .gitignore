@@ -61,3 +61,6 @@ android/build-apk-release.log
 android/build-log.txt
 build-apk-err.txt
 build-apk-log.txt
+
+# Transient release-build orchestration pointer
+release-build-current.txt

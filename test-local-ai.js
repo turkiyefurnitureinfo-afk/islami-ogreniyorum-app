@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { getAIAnswer } = require("./ai-answer");
+const { getAIAnswer } = require("./server/ai-answer");
 
 async function test() {
   console.log("Testing local AI answer with parallel fallback...");
