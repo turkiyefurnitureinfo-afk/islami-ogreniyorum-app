@@ -1,4 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// Offline ↔ online profile conflict-resolution helpers (pure logic in
+// profileSync.js, unit-tested by scripts/test-profile-sync.js).
+import { mergeUserProfiles, profileTime, syncProfileToCloud } from './profileSync.js';
+export { mergeUserProfiles, profileTime, syncProfileToCloud };
 
 // Storage keys
 // =============

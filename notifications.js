@@ -129,6 +129,13 @@ function extractEndpoint(url) {
 function getRateLimitCategory(path, method) {
   const lowerPath = path.toLowerCase();
 
+  // Notification endpoints - these should never be rate limited as they are
+  // fire-and-forget calls that notify the backend of user activity. Rate limiting
+  // them causes notifications to silently fail.
+  if (lowerPath.includes('/posts') || lowerPath.includes('/community') || lowerPath.includes('/like') || lowerPath.includes('/contributions')) {
+    return 'notification';
+  }
+
   // Authentication endpoints
   if (lowerPath.includes('/auth') || lowerPath.includes('/login') || lowerPath.includes('/register')) {
     return 'auth';

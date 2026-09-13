@@ -18,6 +18,9 @@ const WelcomeScreen = ({ styles, palette, t, now, account, setWelcomeScreenShown
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
 
+  // Safely get account display name (handle undefined account)
+  const displayName = account?.fullName || getTranslation('guest', 'Guest');
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.page }]}>
       <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
@@ -26,7 +29,9 @@ const WelcomeScreen = ({ styles, palette, t, now, account, setWelcomeScreenShown
           <Text style={styles.welcomeGreeting}>
             {getTranslation('greeting', 'Welcome')}
           </Text>
-          <Text style={styles.welcomeTimeGreeting}>{timeGreeting}, {account.fullName || getTranslation('guest', 'Guest')}</Text>
+          <Text style={styles.welcomeTimeGreeting}>
+            {timeGreeting}, {displayName}
+          </Text>
           <Text style={styles.welcomeText}>
             {getTranslation('welcomeMessage', 'Welcome to the app!')}
           </Text>

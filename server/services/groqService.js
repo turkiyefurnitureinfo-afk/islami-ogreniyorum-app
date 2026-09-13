@@ -38,7 +38,33 @@ export async function getGroqChatCompletion(messages) {
     throw new Error('[GroqService] Missing GROQ_API_KEY environment variable.');
   }
 
+  if (!Array.isArray(messages)) {
+    throw new Error('[GroqService] messages must be an array.');
+  }
+
+  const safeMessages = messages
+    .filter((m) => m && typeof m?.content === 'string')
+    .slice(0, 20)
+    .map((m) => ({ role: m.role === 'system' || m.role === 'assistant' ? m.role : 'user', content: String(m.content).slice(0, 4000) }))
+    .filter((m) => m && m.content.length > 0);
+
+  if (safeMessages.length === 0) {
+    throw new Error('[GroqService] No valid messages to send.');
+  }
+
+  let controller;
+  let timer = null;
+
   try {
+    try {
+      controller = new AbortController();
+      timer = setTimeout(() => {
+        try { controller.abort(); } catch {}
+      }, TIMEOUT_MS);
+    } catch {
+      controller = undefined;
+    }
+
     const res = await fetch(GROQ_BASE_URL + '/chat/completions', {
       method: 'POST',
       headers: {
@@ -47,33 +73,49 @@ export async function getGroqChatCompletion(messages) {
       },
       body: JSON.stringify({
         model: DEFAULT_MODEL,
-        messages,
+        messages: safeMessages,
         temperature: 0.6,
         max_tokens: 1024,
       }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      ...(controller ? { signal: controller.signal } : {}),
     });
 
-    const data = await res.json().catch(() => ({}));
+    if (timer) clearTimeout(timer);
+
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {
+      const statusText = res.statusText || '';
+      throw new Error(`[GroqService] HTTP ${res.status}${statusText ? ': ' + statusText : ''}`);
+    }
 
     if (!res.ok) {
-      throw new Error(
-        '[GroqService] HTTP ' + res.status + ': ' + (data?.error?.message || res.statusText)
-      );
+      const errorMsg = data?.error?.message || res.statusText || `[HTTP ${res.status}]`;
+      throw new Error(`[GroqService] HTTP ${res.status}: ${errorMsg}`);
     }
 
     const content = data?.choices?.[0]?.message?.content;
     if (!content) {
       throw new Error('[GroqService] Empty response from Groq.');
     }
+
     return content;
   } catch (error) {
+    if (timer) {
+      try { clearTimeout(timer); } catch {}
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+
     if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
-      throw new Error('[GroqService] Request timed out after ' + TIMEOUT_MS + ' ms.');
+      throw new Error(`[GroqService] Request timed out after ${TIMEOUT_MS} ms.`);
     }
-    if (error instanceof Error && error.message.includes('[GroqService]')) {
-      throw error;
+
+    if (message.startsWith('[GroqService]')) {
+      throw error instanceof Error ? error : new Error(message);
     }
-    throw new Error('[GroqService] Failed to get Groq completion: ' + error.message);
+
+    throw new Error(`[GroqService] Failed to get Groq completion: ${message}`);
   }
 }

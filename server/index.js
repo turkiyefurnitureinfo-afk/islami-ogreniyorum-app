@@ -8,6 +8,10 @@ const { collectNews, collectScholarVideos } = require('./news-collector');
 const { getPrayerTimes } = require('./prayer-times');
 // Firebase ID-token verification so ownership of synced content can't be spoofed.
 const { requireVerifiedUser } = require('./verify');
+// Pure, dependency-free push helpers (chunking / sanitization / message
+// building / channel routing) so the dispatch logic is unit-testable without
+// booting an HTTP server — see scripts/test-push-dispatch.js.
+const { sanitizeText, channelForTrigger, buildPushMessage, sendPushChunks } = require('./push-dispatch');
 
 const app = express();
 
@@ -22,7 +26,47 @@ app.use(cors(corsOptions));
 
 // Cap request bodies — the largest legit payload is a community post/comment.
 // Prevents oversized-body abuse on the free-tier deployment.
+// NOTE: /api/upload uses its own 60mb parser (declared below) for base64 media.
 app.use(express.json({ limit: '32kb' }));
+app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+
+// Strict per-endpoint AI rate limiting (Task 1): expensive upstreams
+// (Serper + Groq) get their own tight bucket on top of the global limiter.
+const AI_LIMIT_WINDOW_MS = Number(process.env.AI_LIMIT_WINDOW_MS || 60_000);
+const AI_LIMIT_MAX = Number(process.env.AI_RATE_LIMIT_MAX || 20);
+const aiBuckets = new Map(); // ip -> { count, resetAt }
+function aiRateLimit(req, res, next) {
+  try {
+    const ip =
+      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+      req.socket?.remoteAddress ||
+      'unknown';
+    const now = Date.now();
+    let bucket = aiBuckets.get(ip);
+    if (!bucket || bucket.resetAt <= now) {
+      bucket = { count: 0, resetAt: now + AI_LIMIT_WINDOW_MS };
+      aiBuckets.set(ip, bucket);
+    }
+    bucket.count += 1;
+    if (bucket.count > AI_LIMIT_MAX) {
+      const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+      res.set('Retry-After', String(retryAfter));
+      return res.status(429).json({ success: false, error: 'AI rate limit exceeded, slow down.' });
+    }
+    next();
+  } catch {
+    next();
+  }
+}
+
+/** Validate Expo push token format without throwing. */
+function isValidExpoToken(token) {
+  try {
+    return typeof token === 'string' && Expo.isExpoPushToken(token);
+  } catch {
+    return false;
+  }
+}
 
 // ---------- Security headers ----------
 app.use((_req, res, next) => {
@@ -32,7 +76,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-// ---------- Crash-safety ----------
+// ---------- Crash-safety (Task 1: Global Debugging) ----------
 // Express 4 cannot catch exceptions/rejections thrown inside async route
 // handlers: one bug would kill the whole server mid-request (this actually
 // happened with /api/register during the Firestore migration). Rather than
@@ -40,21 +84,36 @@ app.use((_req, res, next) => {
 // rejection is forwarded to Express' error pipeline as a clean 500 response.
 function crashProof(handler) {
   return function wrapped(req, res, next) {
-    Promise.resolve(handler(req, res, next)).catch(next);
+    try {
+      const out = handler(req, res, next);
+      if (out && typeof out.catch === 'function') {
+        out.catch((err) => {
+          if (typeof next === 'function') next(err);
+          else console.error('[crashProof] async handler failed:', err?.stack || err);
+        });
+      }
+    } catch (err) {
+      if (typeof next === 'function') next(err);
+      else throw err;
+    }
   };
 }
 for (const method of ['get', 'post', 'put', 'delete', 'patch']) {
   const original = app[method].bind(app);
-  app[method] = (path, ...handlers) =>
-    original(
-      path,
-      ...handlers.map((h) =>
-        typeof h === 'function' && h.length === 3 ? crashProof(h) : h
-      )
-    );
+  app[method] = (path, ...handlers) => {
+    const wrappedHandlers = handlers.map((h) => {
+      // Always wrap handlers in crashProof to prevent unhandled rejections
+      // from crashing the entire server
+      if (typeof h === 'function') {
+        return crashProof(h);
+      }
+      return h;
+    });
+    return original(path, ...wrappedHandlers);
+  };
 }
 
-// Last-resort process guards: log loudly but never exit mid-flight.
+// Crash-safety guard — never exit mid-flight, never break existing API contract.
 /** Render any thrown value safely for logging (unknown-typed by design). */
 function describeFatal(value) {
   if (value && typeof value === 'object' && 'stack' in value) {
@@ -85,8 +144,21 @@ const rateLimiterInterval = setInterval(() => {
 }, RATE_LIMIT_WINDOW_MS);
 
 // Clean up interval on server shutdown
-process.on('SIGTERM', () => clearInterval(rateLimiterInterval));
-process.on('SIGINT', () => clearInterval(rateLimiterInterval));
+process.on('SIGTERM', () => {
+  clearInterval(rateLimiterInterval);
+  console.log('[server] SIGTERM received - shutting down gracefully');
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  clearInterval(rateLimiterInterval);
+  console.log('[server] SIGINT received - shutting down gracefully');
+  process.exit(0);
+});
+process.on('SIGQUIT', () => {
+  clearInterval(rateLimiterInterval);
+  console.log('[server] SIGQUIT received - shutting down gracefully');
+  process.exit(0);
+});
 
 function rateLimit(req, res, next) {
   // Render terminates TLS and proxies: x-forwarded-for holds the real client IP.
@@ -127,60 +199,70 @@ const storage = require('./storage');
 
 // Helper: send push notification to a specific user
 async function sendPushToUser(userId, title, body, data = {}, channelId = null) {
-  const device = await storage.getDevice(userId);
-  if (!device || !device.expoPushToken) {
-    console.log(`No device registered for user ${userId}`);
-    return;
-  }
-
-  const messages = [];
-  messages.push({
-    to: device.expoPushToken,
-    sound: 'default',
-    title,
-    body,
-    data,
-    ...(channelId ? { channelId } : {}),
-  });
-
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
-    try {
-      const ticketIds = await expo.sendPushNotificationsAsync(chunk);
-      console.log(`Sent push to ${userId}:`, ticketIds);
-    } catch (error) {
-      console.error(`Error sending push to ${userId}:`, error);
+  try {
+    const device = await storage.getDevice(userId);
+    if (!device || !device.expoPushToken) {
+      console.log(`No device registered for user ${userId}`);
+      return { ok: false, reason: 'no-device' };
     }
+    if (!isValidExpoToken(device.expoPushToken)) {
+      console.warn(`[push] Invalid Expo token for user ${userId} — skipping send`);
+      return { ok: false, reason: 'invalid-token' };
+    }
+
+    const message = buildPushMessage({
+      token: device.expoPushToken,
+      title,
+      body,
+      data,
+      channelId,
+      tokenValid: isValidExpoToken,
+    });
+    if (!message) {
+      console.warn(`[push] Invalid Expo token for user ${userId} — skipping send`);
+      return { ok: false, reason: 'invalid-token' };
+    }
+
+    const result = await sendPushChunks(expo, [message]);
+    return { ok: result.ok, sent: result.sent };
+  } catch (error) {
+    console.error(`[push] sendPushToUser failed for ${userId}:`, error?.message || error);
+    return { ok: false, reason: 'exception' };
   }
 }
 
 // Helper: broadcast to all devices
 async function broadcastPush(title, body, data = {}, channelId = null) {
-  const messages = [];
-  const allDevices = await storage.getAllDevices();
-  for (const device of allDevices) {
-    if (device.expoPushToken) {
-      messages.push({
-        to: device.expoPushToken,
-        sound: 'default',
+  try {
+    const messages = [];
+    const allDevices = await storage.getAllDevices();
+    const seen = new Set();
+    for (const device of allDevices || []) {
+      const token = device && device.expoPushToken;
+      if (!token || seen.has(token)) continue;
+      if (!isValidExpoToken(token)) continue; // skip malformed tokens silently
+      seen.add(token);
+      const message = buildPushMessage({
+        token,
         title,
         body,
         data,
-        ...(channelId ? { channelId } : {}),
+        channelId,
+        tokenValid: isValidExpoToken,
       });
+      if (message) messages.push(message);
     }
-  }
 
-  if (messages.length === 0) return;
+    if (messages.length === 0) return { ok: true, sent: 0 };
 
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
-    try {
-      const ticketIds = await expo.sendPushNotificationsAsync(chunk);
-      console.log('Broadcast sent:', ticketIds);
-        } catch (error) {
-      console.error('Broadcast error:', error);
-    }
+    const result = await sendPushChunks(expo, messages, {
+      onChunkError: (error) => console.error('Broadcast error:', error?.message || error),
+    });
+    console.log(`[push] broadcast -> ${result.sent}/${messages.length} ticket(s)`);
+    return { ok: result.ok, sent: result.sent };
+  } catch (error) {
+    console.error('[push] broadcastPush failed:', error?.message || error);
+    return { ok: false, reason: 'exception' };
   }
 }
 
@@ -207,25 +289,30 @@ async function broadcastPush(title, body, data = {}, channelId = null) {
  * @returns {Promise<string[]>} recipient userIds
  */
 async function computeRecipients(trigger, triggerUserId, entityId) {
-  const isBroadcast = trigger === 'new_question' || trigger === 'new_post';
-  if (isBroadcast) {
-    // Rule 1 & 3: every registered user EXCLUDING the triggering user.
-    const devices = await storage.getAllDevices();
-    return [...new Set(devices.map((d) => String(d.userId)).filter(Boolean))]
-      .filter((uid) => String(uid) !== String(triggerUserId));
-  }
-  // Rules 2 & 4: thread participants only (owner + prior authors).
-  let participantIds;
-  if (trigger === 'new_answer') {
-    participantIds = await storage.getQAParticipantUserIds(entityId);
-  } else if (trigger === 'new_comment') {
-    participantIds = await storage.getCommunityParticipantUserIds(entityId);
-  } else {
+  try {
+    const isBroadcast = trigger === 'new_question' || trigger === 'new_post';
+    if (isBroadcast) {
+      // Rule 1 & 3: every registered user EXCLUDING the triggering user.
+      const devices = await storage.getAllDevices();
+      return [...new Set((devices || []).map((d) => String(d && d.userId)).filter((s) => s && s !== 'undefined' && s !== 'null'))]
+        .filter((uid) => String(uid) !== String(triggerUserId));
+    }
+    // Rules 2 & 4: thread participants only (owner + prior authors).
+    let participantIds;
+    if (trigger === 'new_answer') {
+      participantIds = await storage.getQAParticipantUserIds(entityId);
+    } else if (trigger === 'new_comment') {
+      participantIds = await storage.getCommunityParticipantUserIds(entityId);
+    } else {
+      return [];
+    }
+
+    // Always exclude the user who triggered the action.
+    return (participantIds || []).filter((id) => String(id) !== String(triggerUserId));
+  } catch (error) {
+    console.error('[dispatch] computeRecipients failed:', error?.message || error);
     return [];
   }
-
-  // Always exclude the user who triggered the action.
-  return participantIds.filter((id) => String(id) !== String(triggerUserId));
 }
 
 /**
@@ -244,48 +331,59 @@ async function computeRecipients(trigger, triggerUserId, entityId) {
  * @param {object} [params.data] - extra data payload
  */
 async function dispatchNotification({ trigger, triggerUserId, entityId, title, body, data = {} }) {
-  const recipientIds = await computeRecipients(trigger, triggerUserId, entityId);
-  if (recipientIds.length === 0) return;
+  try {
+    const recipientIds = await computeRecipients(trigger, triggerUserId, entityId);
+    if (!recipientIds || recipientIds.length === 0) return { ok: true, sent: 0 };
 
-  // Batch-fetch device tokens once per recipient (avoids N+1 getDevice calls).
-  const devicesByUser = {};
-  await Promise.all(
-    recipientIds.map(async (uid) => {
-      devicesByUser[uid] = await storage.getDevice(uid);
-    })
-  );
+    // Batch-fetch device tokens once per recipient (avoids N+1 getDevice calls).
+    // allSettled so one storage failure never aborts the whole dispatch.
+    const devicesByUser = {};
+    await Promise.allSettled(
+      recipientIds.map(async (uid) => {
+        try {
+          devicesByUser[uid] = await storage.getDevice(uid);
+        } catch {
+          devicesByUser[uid] = null;
+        }
+      })
+    );
 
-  const messages = [];
-  for (const uid of recipientIds) {
-    const device = devicesByUser[uid];
-    if (!device || !device.expoPushToken) continue;
-    // Route community/Q&A activity through the dedicated channel so users can
-    // mute them independently of prayer times.
-    const channelId =
-      trigger === 'new_post' || trigger === 'new_comment' || trigger === 'new_answer'
-        ? COMMUNITY_CHANNEL_ID
-        : null;
-    messages.push({
-      to: device.expoPushToken,
-      sound: 'default',
-      title,
-      body,
-      data: { ...data, recipientUserId: uid },
-      ...(channelId ? { channelId } : {}),
-    });
-  }
-
-  if (messages.length === 0) return;
-
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
-    try {
-      await expo.sendPushNotificationsAsync(chunk);
-    } catch (error) {
-      console.error('[dispatch] push send failed:', error.message);
+    const safeData = (data && typeof data === 'object') ? data : {};
+    const safeTitle = sanitizeText(title, 120) || 'Notification';
+    const safeBody = sanitizeText(body, 240) || '';
+    const seen = new Set();
+    const messages = [];
+    for (const uid of recipientIds) {
+      const device = devicesByUser[uid];
+      const token = device && device.expoPushToken;
+      if (!token || seen.has(token)) continue;
+      if (!isValidExpoToken(token)) continue; // malformed tokens are skipped, never crash chunking
+      seen.add(token);
+      // Route community/Q&A activity through the dedicated channel so users can
+      // mute them independently of prayer times.
+      const message = buildPushMessage({
+        token,
+        title: safeTitle,
+        body: safeBody,
+        data: { ...safeData, recipientUserId: uid },
+        channelId: channelForTrigger(trigger, COMMUNITY_CHANNEL_ID),
+        tokenValid: isValidExpoToken,
+      });
+      if (message) messages.push(message);
     }
+
+    if (messages.length === 0) return { ok: true, sent: 0 };
+
+    const result = await sendPushChunks(expo, messages, {
+      onTicketError: (t) => console.warn('[dispatch] ticket error:', t.message || t.details || 'unknown'),
+      onChunkError: (error) => console.error('[dispatch] push send failed:', error?.message || error),
+    });
+    console.log(`[dispatch] ${trigger} -> ${result.sent}/${messages.length} push(es) sent (triggered by ${triggerUserId})`);
+    return { ok: true, sent: result.sent };
+  } catch (error) {
+    console.error('[dispatch] dispatchNotification failed:', error?.message || error);
+    return { ok: false, reason: 'exception' };
   }
-  console.log(`[dispatch] ${trigger} -> ${messages.length} push(es) sent (triggered by ${triggerUserId})`);
 }
 
 // ---------- Routes ----------

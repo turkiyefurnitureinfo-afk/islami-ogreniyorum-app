@@ -6,21 +6,32 @@ import { TranslateButton } from './useTranslate.js';
 import { useCachedAvatar } from './avatarCache.js';
 import { validateMediaUrl } from './mediaService.js';
 
-/** Single post video player (hook requires its own component instance). */
+/**
+ * Single post video player (hook requires its own component instance).
+ * Null-safe: renders nothing when no playable URI is present.
+ */
 function PostVideo({ uri, style }) {
-  const player = useVideoPlayer(uri, (p) => {
-    p.loop = false;
-    p.muted = false;
+  const safeUri = typeof uri === 'string' ? uri.trim() : '';
+  const player = useVideoPlayer(safeUri || 'about:blank', (p) => {
+    try {
+      p.loop = false;
+      p.muted = false;
+    } catch { /* player may not be ready yet */ }
   });
-  return (
-    <VideoView
-      player={player}
-      style={style}
-      contentFit="cover"
-      allowsFullscreen
-      allowsPictureInPicture
-    />
-  );
+  if (!safeUri) return null;
+  try {
+    return (
+      <VideoView
+        player={player}
+        style={style}
+        contentFit="cover"
+        allowsFullscreen
+        allowsPictureInPicture
+      />
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -33,28 +44,48 @@ function AvatarImage({ url, fallback, style }) {
   const cached = useCachedAvatar(url);
   const src = cached || url;
   const [errored, setErrored] = useState(false);
-  if (src) {
-    // Reset error flag when the source changes so a new URL gets a fresh attempt.
+  const [retryKey, setRetryKey] = useState(0);
+  // Track the last src in state instead of setState-during-render (React-safe).
+  const [lastSrc, setLastSrc] = useState(src);
+  if (lastSrc !== src) {
+    setLastSrc(src);
     if (errored) setErrored(false);
+  }
+  if (src && !errored) {
     return (
       <Image
+        key={`${src}#${retryKey}`}
         source={{ uri: src }}
         style={style}
-        onError={() => setErrored(true)}
+        resizeMode="cover"
+        accessibilityRole="image"
+        onError={() => {
+          // One automatic retry covers transient network blips; after that the
+          // neutral placeholder shows (never a broken layout or the emoji).
+          if (retryKey === 0) setRetryKey(1);
+          else setErrored(true);
+        }}
       />
     );
   }
-  // No source at all (genuinely no avatar) → emoji fallback.
-  if (!url) {
+  if (!src || errored) {
+    if (!url) {
+      // No source at all (genuinely no avatar) → emoji fallback.
+      return <Text style={style}>{fallback}</Text>;
+    }
+    if (errored) {
+      // URL exists but the image failed to load (offline + uncached) →
+      // neutral placeholder, NOT the emoji. The emoji is reserved for
+      // "no picture at all".
+      return (
+        <View style={style}>
+          <Text style={{ fontSize: 16, opacity: 0.4 }}>👤</Text>
+        </View>
+      );
+    }
     return <Text style={style}>{fallback}</Text>;
   }
-  // URL exists but the image failed to load (offline + uncached) → neutral
-  // placeholder, NOT the emoji. The emoji is reserved for "no picture at all".
-  return (
-    <View style={style}>
-      <Text style={{ fontSize: 16, opacity: 0.4 }}>👤</Text>
-    </View>
-  );
+  return <Text style={style}>{fallback}</Text>;
 }
 
 const CommunityTab = ({
@@ -189,7 +220,8 @@ const CommunityTab = ({
   };
 
   const handleShare = () => {
-    handleCreatePost(media).finally(() => setMedia(null));
+    if (!newPostText.trim() && !media) return;
+    handleCreatePost(newPostText, media).finally(() => setMedia(null));
   };
 
   // Moderation: hand the item up to App's confirm dialog (report / block).

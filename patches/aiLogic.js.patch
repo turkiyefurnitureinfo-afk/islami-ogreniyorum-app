@@ -1,0 +1,95 @@
+diff --git a/aiLogic.js b/aiLogic.js
+index cae7325..b6ab3af 100644
+--- a/aiLogic.js
++++ b/aiLogic.js
+@@ -59,20 +59,54 @@ const ISLAMIC_KEYWORDS_EN = [
+  * @returns {boolean}
+  */
+ function isReligiousQuery(query, language) {
+-  const q = query.toLowerCase();
++  if (query == null) return false;
++  const q = String(query).toLowerCase();
+   const keywords = language === 'tr' ? ISLAMIC_KEYWORDS_TR : ISLAMIC_KEYWORDS_EN;
+   return keywords.some((kw) => q.includes(kw));
+ }
+ 
++/** Safe AbortSignal.timeout with fallback for older RN runtimes. */
++function timeoutSignal(ms) {
++  try {
++    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
++      return AbortSignal.timeout(ms);
++    }
++  } catch { /* fall through to manual controller */ }
++  try {
++    const controller = new AbortController();
++    setTimeout(() => { try { controller.abort(); } catch {} }, ms);
++    return controller.signal;
++  } catch {
++    return undefined;
++  }
++}
++
+ async function fetchJson(url, opts = {}) {
+-  const res = await fetch(url, {
+-    ...opts,
+-    signal: AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS),
+-  });
++  let res;
++  try {
++    res = await fetch(url, {
++      ...opts,
++      signal: opts.signal || timeoutSignal(WEB_SEARCH_TIMEOUT_MS),
++    });
++  } catch (error) {
++    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
++      throw Object.assign(new Error('Request timed out'), { status: 408, timeout: true });
++    }
++    throw error instanceof Error ? error : new Error(String(error));
++  }
+   if (!res.ok) {
+     throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+   }
+-  return res.json();
++  let data;
++  try {
++    data = await res.json();
++  } catch {
++    throw new Error('Failed to parse JSON response');
++  }
++  if (data == null || typeof data !== 'object') {
++    throw new Error('Unexpected empty JSON response');
++  }
++  return data;
+ }
+ 
+ /**
+@@ -90,9 +124,10 @@ async function fetchJsonWithRetry(url) {
+       return await fetchJson(url);
+     } catch (error) {
+       lastError = error;
+-      if (i < backoffs.length) {
+-        await new Promise((resolve) => setTimeout(resolve, backoffs[i]));
+-      }
++      const status = error?.status ?? Number(/HTTP (\d+)/.exec(error?.message || '')?.[1] || 0);
++      const retryable = !status || status === 408 || status === 429 || status >= 500;
++      if (!retryable || i >= backoffs.length) break;
++      await new Promise((resolve) => setTimeout(resolve, backoffs[i]));
+     }
+   }
+   throw lastError;
+@@ -935,6 +970,7 @@ async function fetchServerAIAnswer(question, language) {
+       };
+     } catch (error) {
+       if (error.isWarmingUp) throw error; // re-throw warming-up signal
++      // Return null only when we've exhausted all endpoints
+       if (endpoint === '/api/ai/answer') {
+         console.warn('Server AI unavailable:', error?.message || error);
+         return null;
+@@ -945,6 +981,7 @@ async function fetchServerAIAnswer(question, language) {
+       clearTimeout(timer);
+     }
+   }
++  // Explicitly return null if loop completes without finding an answer
+   return null;
+ }
+ 

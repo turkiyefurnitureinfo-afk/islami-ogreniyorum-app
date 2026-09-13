@@ -35,17 +35,6 @@ function normalizeMinutes(minutes) {
 }
 
 /**
- * Compute prayer times for a given date/location.
- * Times are returned as minutes since local midnight (0..1440).
- *
- * @param {Date} now - the current date/time
- * @param {number} latitude - location latitude in degrees
- * @param {number} longitude - location longitude in degrees
- * @param {number} tz - timezone offset from UTC in hours
- * @param {string} [methodKey='diyanet'] - calculation convention (see PRAYER_METHODS)
- * @returns {{fajr:number, sunrise:number, dhuhr:number, asr:number, maghrib:number, isha:number}}
- */
-/**
  * fetchJsonWithRetry — resilient JSON fetch for the sleeping Render free-tier
  * backend. Retries network failures/timeouts with backoff so the first cold
  * start of the server does not leave users on stale fallback data.
@@ -58,16 +47,39 @@ function normalizeMinutes(minutes) {
  */
 export async function fetchJsonWithRetry(url, options = {}, retries = 2, timeoutMs = 45000) {
   let lastError;
+  /** Build an abort signal that always works (AbortSignal.timeout may be missing on older RN). */
+  function buildSignal() {
+    if (options.signal) return options.signal;
+    try {
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        return AbortSignal.timeout(timeoutMs);
+      }
+    } catch { /* fall through */ }
+    try {
+      const controller = new AbortController();
+      setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
+      return controller.signal;
+    } catch {
+      return undefined;
+    }
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: buildSignal(),
       });
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw Object.assign(new Error(`HTTP ${response.status}`), { status: response.status });
       }
-      return await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('Failed to parse JSON response');
+      }
+      if (data == null) throw new Error('Unexpected empty JSON response');
+      return data;
     } catch (error) {
       lastError = error;
       // Retry only transient problems (network/timeout); skip client errors.
@@ -85,55 +97,24 @@ export async function fetchJsonWithRetry(url, options = {}, retries = 2, timeout
 }
 
 export function computeTimes(now, latitude, longitude, tz, methodKey = 'diyanet') {
-  // Use local date for dayOfYear to avoid off-by-one near midnight for users
-  // in positive UTC offsets (e.g., UTC+3 in Turkey). Prayer times are displayed
-  // in local time, so the calculation should use the local day.
-  const startOfYear = new Date(now.getFullYear(), 0, 0);
-  const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000);
-
-  const decl = sunDeclination(dayOfYear);
-  const eot = equationOfTime(dayOfYear);
-
-  // Solar noon in minutes relative to the local standard-time midnight
-  const solarNoon = 720 - 4 * longitude + eot + tz * 60;
-
-  // Calculation-method presets. Angles are sun-altitude thresholds below the
-  // horizon; Umm al-Qura fixes Isha to minutes after Maghrib instead.
-  // Diyanet (Turkey) uses Fajr 18° / Isha 17°.
-  const METHODS = {
-    diyanet: { fajr: 18, isha: 17 },
-    mwl: { fajr: 18, isha: 17 },
-    isna: { fajr: 15, isha: 15 },
-    egypt: { fajr: 19.5, isha: 17.5 },
-    makkah: { fajr: 18.5, ishaMinutesAfterMaghrib: 90 },
-    karachi: { fajr: 18, isha: 18 },
-  };
-  const m = METHODS[methodKey] || METHODS.diyanet;
-
-  const twilightAngle = 0.833; // accounts for atmospheric refraction
-
-  const hFajr = hourAngle(latitude, decl, -m.fajr);
-  const hSunrise = hourAngle(latitude, decl, -twilightAngle);
-  const hIsha = m.isha !== undefined ? hourAngle(latitude, decl, -m.isha) : null;
-
-  // Asr (Shafi'i): when shadow length = object length + noon shadow.
-  // tan(altitude) = 1 / (1 + tan(|lat - decl|))
-  const asrAltitude = radToDeg(
-    Math.atan(1 / (1 + Math.tan(degToRad(Math.abs(latitude - decl)))))
-  );
-  const hAsr = hourAngle(latitude, decl, asrAltitude);
-
-  return {
-    fajr: normalizeMinutes(solarNoon - hFajr * 4),
-    sunrise: normalizeMinutes(solarNoon - hSunrise * 4),
-    dhuhr: normalizeMinutes(solarNoon),
-    asr: normalizeMinutes(solarNoon + hAsr * 4),
-    maghrib: normalizeMinutes(solarNoon + hSunrise * 4),
-    isha:
-      m.ishaMinutesAfterMaghrib !== undefined
-        ? normalizeMinutes(solarNoon + hSunrise * 4 + m.ishaMinutesAfterMaghrib)
-        : normalizeMinutes(solarNoon + hIsha * 4),
-  };
+  try {
+    if (!(now instanceof Date) || Number.isNaN(now.getTime())) return null;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(tz)) return null;
+    const startOfYear = new Date(now.getFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000);
+    const decl = sunDeclination(dayOfYear);
+    const eot = equationOfTime(dayOfYear);
+    const solarNoon = 720 - 4 * longitude + eot + tz * 60;
+    const METHODS = { diyanet: { fajr: 18, isha: 17 }, mwl: { fajr: 18, isha: 17 }, isna: { fajr: 15, isha: 15 }, egypt: { fajr: 19.5, isha: 17.5 }, makkah: { fajr: 18.5, ishaMinutesAfterMaghrib: 90 }, karachi: { fajr: 18, isha: 18 }, };
+    const m = METHODS[methodKey] || METHODS.diyanet;
+    const twilightAngle = 0.833;
+    const hFajr = hourAngle(latitude, decl, -m.fajr);
+    const hSunrise = hourAngle(latitude, decl, -twilightAngle);
+    const hIsha = m.isha !== undefined ? hourAngle(latitude, decl, -m.isha) : null;
+    const asrAltitude = radToDeg(Math.atan(1 / (1 + Math.tan(degToRad(Math.abs(latitude - decl))))));
+    const hAsr = hourAngle(latitude, decl, asrAltitude);
+    return { fajr: normalizeMinutes(solarNoon - hFajr * 4), sunrise: normalizeMinutes(solarNoon - hSunrise * 4), dhuhr: normalizeMinutes(solarNoon), asr: normalizeMinutes(solarNoon + hAsr * 4), maghrib: normalizeMinutes(solarNoon + hSunrise * 4), isha: m.ishaMinutesAfterMaghrib !== undefined ? normalizeMinutes(solarNoon + hSunrise * 4 + m.ishaMinutesAfterMaghrib) : normalizeMinutes(solarNoon + hIsha * 4), };
+  } catch (error) { console.warn('[prayer] computeTimes failed:', error?.message || error); return null; }
 }
 
 /**
@@ -142,16 +123,21 @@ export function computeTimes(now, latitude, longitude, tz, methodKey = 'diyanet'
  * @param {'tr'|'en'} lang
  */
 export function timeAgo(then, lang = 'tr') {
-  const t = typeof then === 'string' ? new Date(then) : then;
-  if (!t || Number.isNaN(t.getTime())) return lang === 'tr' ? 'şimdi' : 'just now';
-  const s = Math.max(0, Math.floor((Date.now() - t.getTime()) / 1000));
-  if (s < 60) return lang === 'tr' ? 'şimdi' : 'just now';
-  const min = Math.floor(s / 60);
-  if (min < 60) return lang === 'tr' ? `${min} dk önce` : `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return lang === 'tr' ? `${hr} sa önce` : `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return lang === 'tr' ? `${day} gün önce` : `${day}d ago`;
+  try {
+    const t = typeof then === 'string' ? new Date(then) : then;
+    if (!t || Number.isNaN(t.getTime())) return lang === 'tr' ? 'şimdi' : 'just now';
+    const s = Math.max(0, Math.floor((Date.now() - t.getTime()) / 1000));
+    if (s < 60) return lang === 'tr' ? 'şimdi' : 'just now';
+    const min = Math.floor(s / 60);
+    if (min < 60) return lang === 'tr' ? `${min} dk önce` : `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return lang === 'tr' ? `${hr} sa önce` : `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    if (!Number.isFinite(day) || day < 0) return lang === 'tr' ? 'şimdi' : 'just now';
+    return lang === 'tr' ? `${day} gün önce` : `${day}d ago`;
+  } catch {
+    return lang === 'tr' ? 'şimdi' : 'just now';
+  }
 }
 
 /**
@@ -159,6 +145,7 @@ export function timeAgo(then, lang = 'tr') {
  * @param {number} minutes - minutes since local midnight (may be a float)
  */
 export function fmt(minutes) {
+  if (!Number.isFinite(minutes)) return '--:--';
   const m = normalizeMinutes(minutes);
   const h = Math.floor(m / 60);
   const min = Math.floor(m % 60);
@@ -170,8 +157,13 @@ export function fmt(minutes) {
  * @param {Date} date
  */
 export function formatClock(date) {
-  const h = date.getHours();
-  const min = date.getMinutes();
-  const s = date.getSeconds();
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  try {
+    if (!date || !(date instanceof Date) || Number.isNaN(date.getTime())) return '--:--:--';
+    const h = date.getHours();
+    const min = date.getMinutes();
+    const s = date.getSeconds();
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  } catch {
+    return '--:--:--';
+  }
 }

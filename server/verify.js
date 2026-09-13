@@ -135,7 +135,7 @@ async function resolveVerifiedIdentity(req) {
  * a failing token is never trusted. Responds are JSON to match app parsing.
  */
 function requireVerifiedUser(req, res, next) {
-  resolveVerifiedIdentity(req).then((identity) => {
+  return resolveVerifiedIdentity(req).then((identity) => {
     if (identity.status === 'rejected') {
       return res.status(401).json({ error: 'Unauthorized: invalid session token.' });
     }
@@ -146,7 +146,10 @@ function requireVerifiedUser(req, res, next) {
   }).catch((err) => {
     console.error('[verify] middleware error:', err && err.message);
     // Fail closed on internal errors rather than trusting the client id.
-    return res.status(500).json({ error: 'Authentication error' });
+    if (typeof res?.status === 'function' && typeof res?.json === 'function') {
+      return res.status(500).json({ error: 'Authentication error' });
+    }
+    throw err;
   });
 }
 

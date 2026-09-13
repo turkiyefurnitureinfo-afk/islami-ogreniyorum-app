@@ -167,6 +167,13 @@ export const RATE_LIMITS = {
     maxRequests: 30,    // Maximum requests
     windowMs: 60000,    // Per 60 seconds
   },
+  // Notification endpoints: very permissive since these are fire-and-forget
+  // calls that notify the backend of user activity. Rate limiting them causes
+  // notifications to silently fail.
+  notification: {
+    maxRequests: 100,   // High limit - notifications should rarely be blocked
+    windowMs: 60000,    // Per 60 seconds
+  },
   // Stricter limits for write operations
   write: {
     maxRequests: 10,    // Maximum write requests

@@ -63,34 +63,45 @@ function consumeQuota() {
  *   Up to 5 results, or [] when quota is exhausted / API unconfigured / no results.
  */
 export async function searchSerper(query, language = 'en') {
-  if (!SERPER_API_KEY) {
-    console.warn('[serperService] Missing SERPER_API_KEY — skipping web search.');
-    return [];
-  }
-
-  const quota = consumeQuota();
-  if (quota === 'exhausted') {
-    console.warn(`[serperService] Monthly quota exhausted (${MONTHLY_LIMIT}). Skipping web search.`);
-    return [];
-  }
-
-  const body = {
-    q: query,
-    num: 5,
-    gl: language === 'tr' ? 'tr' : 'us',
-    hl: language === 'tr' ? 'tr' : 'en',
-  };
-
   try {
-    const res = await fetch(SERPER_BASE_URL + '/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-KEY': SERPER_API_KEY,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-    });
+    const q = String(query || '').trim().slice(0, 500);
+    if (!q) return [];
+    const lang = language === 'tr' ? 'tr' : 'en';
+    if (!SERPER_API_KEY) {
+      console.warn('[serperService] Missing SERPER_API_KEY — skipping web search.');
+      return [];
+    }
+
+    const quota = consumeQuota();
+    if (quota === 'exhausted') {
+      console.warn(`[serperService] Monthly quota exhausted (${MONTHLY_LIMIT}). Skipping web search.`);
+      return [];
+    }
+
+    const body = {
+      q,
+      num: 5,
+      gl: lang === 'tr' ? 'tr' : 'us',
+      hl: lang,
+    };
+
+    let controller;
+    let timer = null;
+    try {
+      try {
+        controller = new AbortController();
+        timer = setTimeout(() => { try { controller.abort(); } catch {} }, SEARCH_TIMEOUT_MS);
+      } catch { controller = undefined; }
+      const res = await fetch(SERPER_BASE_URL + '/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-KEY': SERPER_API_KEY,
+        },
+        body: JSON.stringify(body),
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (timer) { try { clearTimeout(timer); } catch {} }
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => '');

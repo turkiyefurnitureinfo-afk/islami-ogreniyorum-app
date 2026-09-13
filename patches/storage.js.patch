@@ -1,0 +1,13 @@
+diff --git a/storage.js b/storage.js
+index f0f3e10..f82673f 100644
+--- a/storage.js
++++ b/storage.js
+@@ -1,4 +1,8 @@
+ import AsyncStorage from '@react-native-async-storage/async-storage';
++// Offline ↔ online profile conflict-resolution helpers (pure logic in
++// profileSync.js, unit-tested by scripts/test-profile-sync.js).
++import { mergeUserProfiles, profileTime, syncProfileToCloud } from './profileSync.js';
++export { mergeUserProfiles, profileTime, syncProfileToCloud };
+ 
+ // Storage keys
+ // =============

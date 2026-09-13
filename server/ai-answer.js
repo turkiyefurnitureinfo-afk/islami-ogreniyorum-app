@@ -23,37 +23,29 @@ const { getSearchAnswer } = require('./search-answer');
  * @returns {Promise<{answer: string, provider: string, sources: Array}>} an answer object, or null when no answer could be generated
  */
 async function getAIAnswer(question, language = 'tr') {
-  if (!question || typeof question !== 'string') {
-    throw new Error('Question must be a non-empty string');
-  }
+  if (question == null) return null;
+  if (typeof question !== 'string') return null;
+  const safeQuestion = question.trim();
+  if (safeQuestion.length === 0) return null;
 
   const validLanguages = ['tr', 'en'];
   const lang = validLanguages.includes(language) ? language : 'tr';
 
-  // Cap the payload the AI provider sees (cost + abuse protection).
-  const safeQuestion = question.trim().slice(0, 1000);
-  if (safeQuestion.length < 2) {
-    throw new Error('Question is too short');
-  }
+  if (safeQuestion.length < 2) return null;
 
-  // ------------------------------------------------------------------
-  // Web-search pipeline (Serper.dev Google results when configured,
-  // else DuckDuckGo / Wikipedia). Always available.
-  // ------------------------------------------------------------------
   try {
     const searchAnswer = await getSearchAnswer(safeQuestion, lang);
-    if (searchAnswer) {
+    if (searchAnswer && typeof searchAnswer.answer === 'string') {
       return {
         answer: searchAnswer.answer,
-        provider: searchAnswer.provider,
-        sources: searchAnswer.sources,
+        provider: searchAnswer.provider || 'none',
+        sources: Array.isArray(searchAnswer.sources) ? searchAnswer.sources : [],
       };
     }
   } catch (error) {
-    console.error('[getAIAnswer] search fallback failed:', error.message);
+    console.error('[getAIAnswer] search fallback failed:', error?.message || error);
   }
 
-  // No answer could be generated right now.
   return null;
 }
 

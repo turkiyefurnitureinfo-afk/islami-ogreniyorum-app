@@ -50,3 +50,14 @@ tmp-*
 eas-status.json
 server/t-err.txt
 dist-verify/
+
+# Local EAS keystore credentials mirror (SECRET — never commit)
+credentials.json
+
+# Local build logs / error captures (debugging artifacts)
+*.err
+android/build-apk-release.err
+android/build-apk-release.log
+android/build-log.txt
+build-apk-err.txt
+build-apk-log.txt
