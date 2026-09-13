@@ -237,13 +237,13 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
     }).catch(() => {});
 
     // CLOUD: authoritative write so the edit survives logout / uninstall.
-    try {
-      cloudSaveProfile(account.email || email, updated.fullName, updated.profilePicture, {
-        occupation: draftOccupation.trim(),
-        address: draftAddress.trim(),
-        bio: draftBio.trim(),
-      });
-    } catch (_e) { /* best-effort */ }
+    // NOTE: try/catch cannot catch a promise rejection, so attach .catch —
+    // otherwise a failed save (offline) surfaces as an unhandled rejection.
+    cloudSaveProfile(account.email || email, updated.fullName, updated.profilePicture, {
+      occupation: draftOccupation.trim(),
+      address: draftAddress.trim(),
+      bio: draftBio.trim(),
+    }).catch(() => { /* best-effort */ });
   };
 
     const saveEmail = () => {

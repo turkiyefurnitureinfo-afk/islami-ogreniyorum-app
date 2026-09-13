@@ -470,3 +470,22 @@ export async function signInWithGoogle(language = 'tr') {
     return { success: false, error: error.message || 'Google sign-in failed' };
   }
 }
+
+/**
+ * Revoke the native Google Sign-In session so the account chooser appears
+ * again the next time the user taps "Sign in with Google" (otherwise the
+ * native module silently re-uses the previous Google account).
+ *
+ * Best-effort by design: logout / account-deletion flows call this and must
+ * never hard-fail when there is no active session (the native module rejects
+ * signOut() when nobody is signed in) or on web (no native module there).
+ */
+export async function signOutGoogle() {
+  if (Platform.OS === 'web') return;
+  try {
+    configureGoogleSignin();
+    await GoogleSignin.signOut();
+  } catch (_e) {
+    // Nothing to revoke (no active session) — treat as success.
+  }
+}

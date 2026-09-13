@@ -13,8 +13,16 @@ const UserAvatar = ({ avatarUrl, avatar, style }) => {
   const cached = useCachedAvatar(avatarUrl);
   const src = cached || avatarUrl;
   const [errored, setErrored] = useState(false);
-  if (src) {
+  const [lastSrc, setLastSrc] = useState(src);
+  // React-safe reset: compare against the last rendered src in state instead
+  // of calling setState unconditionally during render (same pattern as
+  // CommunityTab's AvatarImage / SettingsTab's ModalAvatar). A stale failure
+  // from a previous avatar never hides a newly-available picture.
+  if (lastSrc !== src) {
+    setLastSrc(src);
     if (errored) setErrored(false);
+  }
+  if (src && !errored) {
     return (
       <Image
         source={{ uri: src }}
@@ -24,7 +32,7 @@ const UserAvatar = ({ avatarUrl, avatar, style }) => {
     );
   }
   // No source at all (genuinely no avatar) → emoji fallback.
-  if (!avatarUrl) {
+  if (!avatarUrl || errored) {
     return <Text style={[style, stylesFallbackText]}>{avatar || '👤'}</Text>;
   }
   // URL exists but the image failed to load (offline + uncached) → neutral

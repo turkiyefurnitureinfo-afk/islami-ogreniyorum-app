@@ -627,8 +627,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
         // Parse date strings like "20 Ağustos 2026" or "August 20, 2026"
         // Note: the class includes ı/İ so Turkish months like "Mayıs"/"Kasım" match.
-        const dateMatch = item.meta.match(/(\d{1,2})\s+([A-Za-zğüşöçıİĞÜŞÖÇ]+)\s+(\d{4})/) ||
-                          item.meta.match(/([A-Za-zğüşöçıİĞÜŞÖÇ]+)\s+(\d{1,2}),\s+(\d{4})/);
+        // Guard: live server items must always carry `meta`, but a missing/odd
+        // field must never abort the whole notification scheduling pass.
+        const metaText = typeof item.meta === 'string' ? item.meta : '';
+        const dateMatch = metaText.match(/(\d{1,2})\s+([A-Za-zğüşöçıİĞÜŞÖÇ]+)\s+(\d{4})/) ||
+                          metaText.match(/([A-Za-zğüşöçıİĞÜŞÖÇ]+)\s+(\d{1,2}),\s+(\d{4})/);
 
         if (!dateMatch) continue;
 
