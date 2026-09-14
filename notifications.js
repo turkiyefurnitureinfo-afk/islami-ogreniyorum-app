@@ -502,21 +502,43 @@ export async function setupNotificationChannel() {
  */
 export async function getExpoPushToken() {
   try {
-        // In SDK 53, expo-constants exposes the EAS project ID under
-    // Constants.expoConfig.extra.eas.projectId. The old `Constants.easConfig`
-    // path does not exist in this SDK version and would always be undefined.
+    // Diagnostics: log what Constants actually exposes at runtime
+    // (SDK 53 path). This tells us whether the eas.projectId survives the
+    // APK build's manifest generation.
+    const expoConfig = Constants?.expoConfig ?? null;
+    const manifest = Constants?.manifest ?? null;
+    const easConfig = Constants?.easConfig ?? null;
     const projectId =
-      Constants?.expoConfig?.extra?.eas?.projectId ??
-      Constants?.manifest?.extra?.eas?.projectId ??
-      Constants?.easConfig?.projectId;
+      expoConfig?.extra?.eas?.projectId ??
+      manifest?.extra?.eas?.projectId ??
+      easConfig?.projectId;
+    console.warn(
+      '[push-token] diagnostics: projectId=',
+      projectId,
+      '| expoConfig=',
+      expoConfig ? 'present' : 'MISSING',
+      '| manifest=',
+      manifest ? 'present' : 'MISSING',
+      '| easConfig=',
+      easConfig ? 'present' : 'MISSING'
+    );
     if (!projectId) {
-      console.log('No EAS projectId configured - skipping push token registration');
+      console.warn(
+        '[push-token] NO_EAS_PROJECT_ID — getExpoPushTokenAsync will not be called. ' +
+          'Check app.json > expo > extra > eas > projectId and that the built manifest ' +
+          'carries it into Constants (SDK 53 exposes it as Constants.expoConfig.extra.eas.projectId).'
+      );
       return null;
     }
+    console.warn('[push-token] calling getExpoPushTokenAsync with projectId=', projectId);
     const token = await Notifications.getExpoPushTokenAsync({ projectId });
+    console.warn(
+      '[push-token] getExpoPushTokenAsync result:',
+      token ? 'OK (data=' + token.data + ')' : 'EMPTY/NULL'
+    );
     return token?.data || null;
   } catch (error) {
-    console.error('Failed to get Expo push token:', error);
+    console.error('[push-token] getExpoPushTokenAsync threw:', error?.message || error);
     return null;
   }
 }
