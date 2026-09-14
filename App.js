@@ -2037,8 +2037,9 @@ const [profileDirectory, setProfileDirectory] = useState({});
 
   // ---------- Community Handlers ----------
 
-  const handleCreatePost = async (media) => {
-    if (!(newPostText.trim() || media)) return;
+    const handleCreatePost = async (text, media) => {
+    const postText = text != null ? text : newPostText;
+    if (!(postText.trim() || media)) return;
     setSharingPost(true);
     try {
       const newPostId = Date.now();
@@ -2097,7 +2098,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
           avatarUrl: profilePicture || null,
         },
         ownerEmail: account.email || null,
-        text: newPostText,
+                text: postText,
         createdAt: new Date(newPostId).toISOString(),
         timestamp: language === 'tr' ? 'şimdi' : 'just now',
         likes: 0,
@@ -2118,7 +2119,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
             newPostId,
             account.email,
             account.fullName,
-            newPostText,
+                        postText,
             permanentMedia?.type || null,
             permanentMedia?.uri || null,
             profilePicture || null
