@@ -143,7 +143,11 @@ const PrayerTab = ({
                               styles.offsetChipText,
                               cfg.offsetMinutes === offset && styles.offsetChipTextActive,
                             ]}>
-                              {language === 'tr' ? `${offset} dk önce` : `${offset} min before`}
+                                                            {offset === 0
+                                ? (language === 'tr' ? 'Vaktinde' : 'On time')
+                                : language === 'tr'
+                                ? `${offset} dk önce`
+                                : `${offset} min before`}
                             </Text>
                           </Pressable>
                         ))}

@@ -27,7 +27,7 @@ import { HIGH_ALARM_SOUND } from './notifications.js';
 export const ALARM_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 /** Offset choices the UI offers, in minutes before the prayer time. */
-export const ALARM_OFFSET_OPTIONS = [10, 20, 30];
+export const ALARM_OFFSET_OPTIONS = [0, 10, 20, 30];
 
 /** Android channel/category ids (v2: fresh ids so new settings always apply). */
 export const ALARM_CHANNEL_ID = 'prayer-alarm-v2';
