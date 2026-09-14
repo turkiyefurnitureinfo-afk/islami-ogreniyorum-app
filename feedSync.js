@@ -144,6 +144,12 @@ export function normalizeServerCommunityPost(doc, language) {
   // --- URL validation: only allow remote http(s) URLs ---
   // Local file:// paths, data: URIs, and relative paths are NOT renderable
   // across devices and must be nulled out to prevent broken images.
+  console.log(
+    '[normalize-post] rawMediaUrl=',
+    rawMediaUrl ? String(rawMediaUrl).substring(0, 120) : '(none)',
+    '| passes http(s) test:',
+    rawMediaUrl && /^https?:\/\//i.test(String(rawMediaUrl).trim())
+  );
   const validMediaUrl =
     rawMediaUrl && /^https?:\/\//i.test(String(rawMediaUrl).trim())
       ? String(rawMediaUrl).trim()

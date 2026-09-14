@@ -36,21 +36,57 @@ export async function uploadCommunityMedia(uri, type) {
   const isVideo = type === 'video';
   const extension = isVideo ? 'mp4' : 'jpg';
 
+  console.log(
+    '[upload] starting upload — uri=',
+    uri.substring(0, 80),
+    '| type=',
+    type,
+    '| ext=',
+    extension
+  );
   const dataUri = await fileToDataUri(uri);
-  const { url } = await fetch(`${API_URL}/api/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(await getSecurityHeaders('POST', '/api/upload', null)),
-    },
-    body: JSON.stringify({ data: dataUri, ext: extension }),
-  }).then((res) => {
-    if (!res.ok) throw new Error(`Upload failed (HTTP ${res.status})`);
-    return res.json();
-  });
+  const uploadStart = Date.now();
+  let httpStatus = null;
+  let returnedUrl = null;
+  try {
+    const res = await fetch(`${API_URL}/api/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getSecurityHeaders('POST', '/api/upload', null)),
+      },
+      body: JSON.stringify({ data: dataUri, ext: extension }),
+    });
+    httpStatus = res.status;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Upload failed (HTTP ${res.status})${errText ? ': ' + errText : ''}`);
+    }
+    const json = await res.json();
+    returnedUrl = json.url;
+  } catch (error) {
+    console.warn(
+      '[upload] FAILED — httpStatus=',
+      httpStatus,
+      '| returnedUrl=',
+      returnedUrl || '(none)',
+      '| error=',
+      error?.message || error
+    );
+    throw error;
+  }
+  console.log(
+    '[upload] SUCCESS — httpStatus=',
+    httpStatus,
+    '| returnedUrl=',
+    returnedUrl,
+    '| elapsed=',
+    Date.now() - uploadStart,
+    'ms'
+  );
 
-  if (!url) throw new Error('Upload returned no URL');
-  return url.startsWith('http') ? url : `${API_URL}${url}`;
+  if (!returnedUrl) throw new Error('Upload returned no URL');
+  return returnedUrl.startsWith('http') ? returnedUrl : `${API_URL}${returnedUrl}`;
 }
 
 /**

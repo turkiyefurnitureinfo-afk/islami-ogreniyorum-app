@@ -534,7 +534,7 @@ export async function getExpoPushToken() {
     const token = await Notifications.getExpoPushTokenAsync({ projectId });
     console.warn(
       '[push-token] getExpoPushTokenAsync result:',
-      token ? 'OK (data=' + token.data + ')' : 'EMPTY/NULL'
+      token ? `OK (data length=${token.data?.length ?? 'unknown'})` : 'EMPTY/NULL'
     );
     return token?.data || null;
   } catch (error) {
@@ -570,9 +570,30 @@ export async function registerDeviceWithBackend(userId, email, name) {
         platform: Platform.OS,
       },
     });
-    return response.ok;
+    if (response.ok) {
+      console.log(
+        '[push-backend] device registration SUCCESS for userId=',
+        userId,
+        '| email=',
+        email,
+        '| platform=',
+        Platform.OS
+      );
+      return true;
+    }
+    const errorBody = await response.json().catch(() => ({}));
+    console.warn(
+      '[push-backend] device registration FAILED — HTTP',
+      response.status,
+      '| body=',
+      JSON.stringify(errorBody)
+    );
+    return false;
   } catch (error) {
-    console.error('Failed to register device with backend:', error);
+    console.error(
+      '[push-backend] device registration THREW —',
+      error?.message || error
+    );
     return false;
   }
 }

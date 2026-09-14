@@ -2058,6 +2058,10 @@ const [profileDirectory, setProfileDirectory] = useState({});
             20000,
             null
           );
+          console.log(
+            '[create-post] upload returned url=',
+            url ? url.substring(0, 120) : '(null/empty)'
+          );
           if (url) {
             permanentMedia = { type: media.type, uri: url };
           } else {
