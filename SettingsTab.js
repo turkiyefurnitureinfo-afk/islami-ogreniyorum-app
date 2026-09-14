@@ -19,8 +19,6 @@ import {
 import { uploadProfileImage } from './mediaService.js';
 import { useCachedAvatar } from './avatarCache.js';
 import { signOutGoogle } from './googleAuth.js';
-import { ALARM_OFFSET_OPTIONS } from './prayerAlarms.js';
-import { fmt } from './utils.js';
 
 // Avatar for the Edit Profile modal: renders from the on-disk cache first so
 // the picture still shows offline; a neutral placeholder shows when the
@@ -59,7 +57,7 @@ function ModalAvatar({ url, fallback, style }) {
   );
 }
 
-const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, isGoogleUser, setIsGoogleUser, setSignedIn, profilePicture, setProfilePicture, setOccupation, setAddress, setBio, prayerAlarms, setPrayerAlarms, times }) => {
+const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notificationsOn, setNotificationsOn, soundOptions, notificationSound, setNotificationSound, prayerMethod, setPrayerMethod, prayerSourceLabel, account, setAccount, isGoogleUser, setIsGoogleUser, setSignedIn, profilePicture, setProfilePicture, setOccupation, setAddress, setBio }) => {
   // Helper function to safely get translations with a fallback
   const getTranslation = (key, fallback = '') => (t && t[key] !== undefined ? t[key] : fallback);
 
@@ -648,84 +646,6 @@ const SettingsTab = ({ styles, t, theme, setTheme, language, setLanguage, notifi
           ))}
         </View>
         <Text style={styles.settingValue}>{getTranslation('selectedSound', 'Selected Sound')}: {notificationSound}</Text>
-      </View>
-
-      {/* ---- Prayer Alarm Settings (visible timers) ---- */}
-      <View style={styles.settingCard}>
-        <View style={styles.settingHeader}>
-          <Text style={styles.settingTitle}>{getTranslation('prayerAlarms', 'Prayer Alarms')}</Text>
-          <Text style={styles.settingValue}>{getTranslation('alarmTimers', 'Alarm Timers')}</Text>
-        </View>
-
-        {(['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'].map((key) => {
-          const entry = (prayerAlarms && prayerAlarms[key]) || null;
-          const isSunrise = key === 'sunrise';
-          const cfg = entry || { enabled: false, offsetMinutes: 0 };
-          const prayerLabel = t && t[key] ? t[key] : key.charAt(0).toUpperCase() + key.slice(1);
-          const displayTime = (times && Number.isFinite(times[key])) ? fmt(times[key]) : '--:--';
-
-          return (
-            <View key={key} style={styles.alarmRow}>
-              <View style={styles.alarmInfo}>
-                <Text style={styles.alarmPrayerName}>
-                  {isSunrise ? (language === 'tr' ? 'Gün Doğumu' : 'Sunrise') : prayerLabel}
-                </Text>
-                <Text style={styles.alarmTime}>{displayTime}</Text>
-              </View>
-              {isSunrise ? (
-                <Text style={styles.alarmDisabled}>{getTranslation('displayOnly', 'Display Only')}</Text>
-              ) : (
-                <View style={styles.alarmControls}>
-                  <Switch
-                    value={!!cfg.enabled}
-                    onValueChange={(v) => setPrayerAlarms((prev) => ({
-                      ...prev,
-                      [key]: { ...(prev && prev[key]), enabled: v, offsetMinutes: (prev && prev[key] && prev[key].offsetMinutes) || 0 },
-                    }))}
-                  />
-                  {cfg.enabled && (
-                    <View style={styles.offsetSelector}>
-                      {ALARM_OFFSET_OPTIONS.map((offset) => (
-                        <Pressable
-                          key={offset}
-                          onPress={() => setPrayerAlarms((prev) => ({
-                            ...prev,
-                            [key]: { ...(prev && prev[key]), enabled: true, offsetMinutes: offset },
-                          }))}
-                          style={[
-                            styles.offsetChip,
-                            cfg.offsetMinutes === offset && styles.offsetChipActive,
-                          ]}
-                        >
-                          <Text style={[
-                            styles.offsetChipText,
-                            cfg.offsetMinutes === offset && styles.offsetChipTextActive,
-                          ]}>
-                            {offset === 0
-                              ? (language === 'tr' ? 'Vaktе' : 'At Time')
-                              : offset === 5
-                              ? (language === 'tr' ? '5 dk önce' : '5 min before')
-                              : offset === 10
-                              ? (language === 'tr' ? '10 dk önce' : '10 min before')
-                              : offset === 15
-                              ? (language === 'tr' ? '15 dk önce' : '15 min before')
-                              : offset === 20
-                              ? (language === 'tr' ? '20 dk önce' : '20 min before')
-                              : offset === 30
-                              ? (language === 'tr' ? '30 dk önce' : '30 min before')
-                              : offset === 45
-                              ? (language === 'tr' ? '45 dk önce' : '45 min before')
-                              : (language === 'tr' ? '60 dk önce' : '60 min before')}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              )}
-            </View>
-          );
-        }))}
       </View>
 
       <View style={styles.settingCard}>

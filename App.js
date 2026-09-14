@@ -18,7 +18,7 @@ import {
   SOUND_OPTIONS,
 } from './data.js';
 import { translations } from './translations.js';
-import { computeTimes, formatClock, fetchJsonWithRetry } from './utils.js';
+import { computeTimes, formatClock, fetchJsonWithRetry, sanitizeTimings } from './utils.js';
 import { sameId, hasRealContent, normalizeServerQA, normalizeServerCommunityPost, mergeQA, mergeCommunityPosts, onlyRealUserPosts } from './feedSync.js';
 import { getDeviceLocale, localeToLanguage } from './locale.js';
 import { detectLocation, autoDetectLocation } from './locationService.js';
@@ -130,6 +130,22 @@ function withTimeout(promise, ms, fallback) {
       }
     );
   });
+}
+
+/**
+ * A GPS/persisted location is only usable when its numeric fields are finite.
+ * Anything else (corrupt storage, a shape saved by an older app version) must
+ * be ignored, so prayer times can never lose their coordinate source and
+ * computeTimes can never receive non-numeric input (which would make it return
+ * null and crash every consumer that indexes into the result).
+ */
+function isValidLocation(loc) {
+  return (
+    !!loc &&
+    Number.isFinite(loc.lat) &&
+    Number.isFinite(loc.lng) &&
+    Number.isFinite(loc.tz)
+  );
 }
 
 function AppInner() {
@@ -270,7 +286,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
         if (savedSettings.prayerAlarms) {
           setPrayerAlarms(sanitizePrayerAlarms(savedSettings.prayerAlarms));
         }
-        if (savedSettings.customLocation) {
+        if (isValidLocation(savedSettings.customLocation)) {
           setCustomLocation(savedSettings.customLocation);
         } else {
           // First launch (nothing saved yet): auto-detect the app language
@@ -484,14 +500,23 @@ const [profileDirectory, setProfileDirectory] = useState({});
     saveCommunityPosts(communityPosts);
   }, [hydrated, communityPosts]);
 
-  const city = customLocation || CITIES[cityKey];
+  // Only use the GPS/persisted location when it is numerically complete;
+  // otherwise fall back to the preset city so prayer times always have a valid
+  // coordinate source (undefined lat/lng/tz would make computeTimes return
+  // null and crash every consumer that indexes into the result).
+  const city = isValidLocation(customLocation)
+    ? customLocation
+    : CITIES[cityKey] || CITIES.istanbul;
   // Use live news from the backend when available, otherwise fall back to static data.
   const newsItems = (liveNews && liveNews.length > 0 ? liveNews : NEWS_ITEMS[language]);
   const scholarVideos = liveScholarVideos && liveScholarVideos.length > 0 ? liveScholarVideos : SCHOLAR_VIDEOS_FALLBACK;
 
   // Set up the Android notification channels once at startup
+  // (fire-and-forget, but must never surface an unhandled rejection)
   useEffect(() => {
-    setupNotificationChannel();
+    setupNotificationChannel().catch((e) =>
+      console.warn('setupNotificationChannel failed:', e?.message || e)
+    );
   }, []);
 
   // Alarm-clock stop handler: dismissing any prayer alarm (tap or ⏹ Kapat /
@@ -659,7 +684,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
       }
     }
 
-    syncNotifications();
+    // Fire-and-forget: attach .catch so a rejected sync (notification module
+    // hiccup, permission race) can never become an unhandled promise rejection.
+    syncNotifications().catch((e) =>
+      console.warn('syncNotifications failed:', e?.message || e)
+    );
 
     return () => {
       isActive = false;
@@ -679,8 +708,12 @@ const [profileDirectory, setProfileDirectory] = useState({});
         const res = await fetch(url, { method: 'GET' });
         if (!res.ok) throw new Error(`status ${res.status}`);
         const data = await res.json();
-        if (!cancelled && data && data.success && data.timings) {
-          setRemoteTimes({ timings: data.timings, method: data.method });
+        // sanitizeTimings validates the payload shape (numbers or "HH:MM"
+        // strings) and returns null for anything unreadable — the device
+        // computation then takes over instead of rendering/crashing on garbage.
+        const clean = sanitizeTimings(data && data.timings);
+        if (!cancelled && data && data.success && clean) {
+          setRemoteTimes({ timings: clean, method: data.method });
         } else if (!cancelled) {
           setRemoteTimes(null);
         }
@@ -692,8 +725,11 @@ const [profileDirectory, setProfileDirectory] = useState({});
     return () => { cancelled = true; };
   }, [city.lat, city.lng, city.tz, prayerMethod]);
 
+  // `|| {}` guarantees `times` is always an object even when computeTimes
+  // fails on bad input (it returns null) — PrayerTab and nextPrayer below
+  // index into it on every render and must never see null.
   const computedTimes = useMemo(
-    () => computeTimes(now, city.lat, city.lng, city.tz, prayerMethod),
+    () => computeTimes(now, city.lat, city.lng, city.tz, prayerMethod) || {},
     [now, city, prayerMethod]
   );
   // Server (Diyanet-convention) times win when available; device math otherwise.
@@ -704,16 +740,25 @@ const [profileDirectory, setProfileDirectory] = useState({});
   const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
 
   const nextPrayer = useMemo(() => {
+    // Null/shape/NaN-safe: this runs on EVERY render (including while the
+    // welcome/auth screens are up). A malformed `times` value must degrade to
+    // a placeholder instead of throwing a render-time TypeError.
     const order = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+    const src = times && typeof times === 'object' ? times : {};
     for (const key of order) {
-      if (times[key] > nowMinutes) {
-        return { key, time: times[key] };
+      const value = Number(src[key]);
+      if (Number.isFinite(value) && value > nowMinutes) {
+        return { key, time: value };
       }
     }
-    return { key: 'fajr', time: times.fajr + 1440 };
+    // Past Isha -> tomorrow's Fajr (numeric; never string-concatenate).
+    const fajr = Number(src.fajr);
+    return { key: 'fajr', time: (Number.isFinite(fajr) ? fajr : 0) + 1440 };
   }, [times, nowMinutes]);
 
-  const remaining = Math.max(0, nextPrayer.time - nowMinutes);
+  const remaining = Number.isFinite(nextPrayer.time)
+    ? Math.max(0, nextPrayer.time - nowMinutes)
+    : 0;
   const diffHours = Math.floor(remaining / 60);
   const diffMinutes = Math.floor(remaining % 60);
   const diffSeconds = Math.floor((remaining * 60) % 60);

@@ -694,25 +694,32 @@ export async function notifyBackendEvent(title, body) {
  * @param {string|null} params.sound - optional sound name
  */
 export async function scheduleEventNotification({ title, body, eventDate, sound = null }) {
-  const now = new Date();
+  // Crash-proof: this runs inside the fire-and-forget notification sync loop
+  // in App.js. One bad event (invalid date, OS scheduling error, notification
+  // flood) must never reject the whole sync and abort the prayers after it.
+  try {
+    const now = new Date();
 
-  // Fire the notification at 9:00 AM on the event day
-  const fireTime = new Date(eventDate);
-  fireTime.setHours(9, 0, 0, 0);
+    // Fire the notification at 9:00 AM on the event day
+    const fireTime = new Date(eventDate);
+    fireTime.setHours(9, 0, 0, 0);
 
-  // If the event is in the past, don't schedule it
-  if (fireTime.getTime() <= now.getTime()) {
-    return;
+    // Invalid / past dates are silently skipped
+    if (Number.isNaN(fireTime.getTime()) || fireTime.getTime() <= now.getTime()) {
+      return;
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound,
+      },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fireTime },
+    });
+  } catch (error) {
+    console.warn('scheduleEventNotification failed:', error?.message || error);
   }
-
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title,
-      body,
-      sound,
-    },
-    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: fireTime },
-  });
 }
 
 /**

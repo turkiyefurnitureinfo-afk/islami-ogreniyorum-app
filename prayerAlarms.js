@@ -27,20 +27,20 @@ import { HIGH_ALARM_SOUND } from './notifications.js';
 export const ALARM_PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
 /** Offset choices the UI offers, in minutes before the prayer time. */
-export const ALARM_OFFSET_OPTIONS = [0, 5, 10, 15, 20, 30, 45, 60];
+export const ALARM_OFFSET_OPTIONS = [10, 20, 30];
 
 /** Android channel/category ids (v2: fresh ids so new settings always apply). */
 export const ALARM_CHANNEL_ID = 'prayer-alarm-v2';
 export const ALARM_CATEGORY_ID = 'prayer_alarm_v2';
 
-/** Default configuration: every prayer rings AT its time, all enabled. */
+/** Default configuration: every prayer rings 10 min before its time, all enabled. */
 export function defaultPrayerAlarms() {
   return {
-    fajr: { enabled: true, offsetMinutes: 0 },
-    dhuhr: { enabled: true, offsetMinutes: 0 },
-    asr: { enabled: true, offsetMinutes: 0 },
-    maghrib: { enabled: true, offsetMinutes: 0 },
-    isha: { enabled: true, offsetMinutes: 0 },
+    fajr: { enabled: true, offsetMinutes: 10 },
+    dhuhr: { enabled: true, offsetMinutes: 10 },
+    asr: { enabled: true, offsetMinutes: 10 },
+    maghrib: { enabled: true, offsetMinutes: 10 },
+    isha: { enabled: true, offsetMinutes: 10 },
   };
 }
 

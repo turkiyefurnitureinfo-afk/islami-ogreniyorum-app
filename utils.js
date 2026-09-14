@@ -167,3 +167,36 @@ export function formatClock(date) {
     return '--:--:--';
   }
 }
+
+/**
+ * Validate/normalize a prayer-times payload into a plain minutes-since-midnight
+ * map: { fajr, sunrise, dhuhr, asr, maghrib, isha }.
+ *
+ * Accepts finite numbers or "HH:MM(…)" strings (the raw AlAdhan shape, in case
+ * a backend/proxy ever passes it through unconverted). Returns null when ANY
+ * required prayer is missing or unreadable, so callers fall back to the
+ * on-device computation instead of rendering garbage or crashing.
+ *
+ * @param {any} raw
+ * @returns {Record<string, number>|null}
+ */
+export function sanitizeTimings(raw) {
+  try {
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    for (const key of ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha']) {
+      let v = raw[key];
+      if (typeof v === 'string') {
+        const m = v.match(/(\d{1,2}):(\d{2})/);
+        if (!m) return null;
+        v = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      }
+      v = Number(v);
+      if (!Number.isFinite(v) || v < 0 || v >= 1440) return null;
+      out[key] = v;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}

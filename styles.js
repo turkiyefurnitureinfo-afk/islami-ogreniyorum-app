@@ -1496,6 +1496,7 @@ export function makeStyles(palette) {
     },
     offsetSelector: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 4,
       marginLeft: 4,
     },
