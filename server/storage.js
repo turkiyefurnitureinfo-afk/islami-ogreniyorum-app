@@ -343,6 +343,7 @@ const memImpl = {
   async registerCommunityPost(postId, ownerUserId, meta = {}) {
     memCommunity.set(String(postId), {
       ownerUserId,
+      ownerEmail: meta.ownerEmail || null,
       text: meta.text || '',
       authorName: meta.authorName || null,
       authorAvatar: meta.authorAvatar || null,
@@ -356,7 +357,7 @@ const memImpl = {
   },
   async getCommunityPost(postId) {
     const p = memCommunity.get(String(postId));
-    return p ? { ownerUserId: p.ownerUserId } : null;
+    return p ? { ownerUserId: p.ownerUserId, ownerEmail: p.ownerEmail || null } : null;
   },
   async setCommunityComment(postId, commentId, userId, meta = {}) {
     const p = memCommunity.get(String(postId));
@@ -383,6 +384,7 @@ const memImpl = {
       .map(([id, p]) => ({
         id,
         ownerUserId: p.ownerUserId,
+        ownerEmail: p.ownerEmail || null,
         text: p.text,
         authorName: p.authorName,
         authorAvatar: p.authorAvatar || null,
@@ -405,7 +407,8 @@ const memImpl = {
     const posts = await this.listCommunityPosts(limit);
     return Promise.all(
       posts.map(async (post) => {
-        if (!post.ownerUserId) return post;
+        // If the post already carries an ownerEmail, keep it (set by the app).
+        if (!post.ownerUserId && !post.ownerEmail) return post;
         try {
           const user = await this.getUser(post.ownerUserId);
           return {

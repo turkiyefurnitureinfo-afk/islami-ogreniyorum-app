@@ -1,18 +1,21 @@
 // ---------------------------------------------------------------------------
-// Question answering — SERVER-FIRST (Serper.dev Google + Groq synthesis).
+// Question answering — ON-DEVICE PRIMARY (Wikipedia + DuckDuckGo), server
+// fallback (Serper.dev Google + Groq synthesis).
 // ---------------------------------------------------------------------------
 // Priority order in getAIAnswer():
-//   1. Backend /api/ai/chat  — Serper.dev Google results synthesized by Groq
+//   1. On-device keyless web search — Wikipedia extracts + DuckDuckGo HTML
+//      results. No quota, no key, no server dependency. Runs on every platform.
+//      This is the primary path that users saw before the server-first refactor.
+//   2. Backend /api/ai/chat — Serper.dev Google results synthesized by Groq
 //      (concise, sourced, conversational Islamic assistant).
-//   2. Backend /api/ai/answer — legacy search pipeline (same server keys).
-//   3. On-device keyless fallback — Wikipedia extracts + DuckDuckGo HTML.
-//      Runs ONLY when the server is unreachable. If you see
-//      "I could not find a matching wikipedia article", the app never
-//      reached the server (old build, offline, or Render sleeping) —
-//      rebuild + reinstall the latest build, then retry on network.
+//      Fallback when on-device search can't produce an answer.
+//   3. Backend /api/ai/answer — legacy search pipeline (same server keys).
+//      Fallback if /api/ai/chat is unavailable.
+//   4. Friendly fallback text — formatted chatbot-style with clickable manual
+//      search links (DuckDuckGo listed first) when nothing else works.
 //
-// SPEED: server call races a local fallback guard; on-device variants fire
-// in parallel (Promise.allSettled) and the best hit wins.
+// SPEED: on-device variants fire in parallel (Promise.allSettled) and the
+// best hit wins. The server fallback runs sequentially after on-device fails.
 //
 // No client-side API keys required. Works on all platforms — RN's fetch has
 // no CORS restrictions on native, and Wikipedia sends permissive CORS
@@ -879,9 +882,27 @@ export async function getAIAnswer(question, language = 'tr') {
   }
 
   // ---------------------------------------------------------------------
-  // PRIMARY SOURCE: backend Serper.dev (Google) + Groq synthesis pipeline.
+  // PRIMARY SOURCE: free keyless on-device web search (Wikipedia/DDG).
+  // This matches the behaviour users saw before the server-first refactor —
+  // Wikipedia extracts and DuckDuckGo web results are the first line.
+  // ---------------------------------------------------------------------
+  console.log('[AI] Attempting on-device web search for:', safeQuestion);
+  try {
+    const webAnswer = await getWebSearchAnswer(safeQuestion, language);
+    if (webAnswer) {
+      console.log('[AI] On-device search succeeded, provider:', webAnswer.provider);
+      persistAIAnswer(safeQuestion, webAnswer).catch(() => {});
+      return webAnswer;
+    }
+    console.warn('[AI] On-device search returned null/empty — falling back to server');
+  } catch (error) {
+    console.warn('[AI] On-device search failed, falling back to server:', error?.message || error);
+  }
+
+  // ---------------------------------------------------------------------
+  // FALLBACK: backend Serper.dev (Google) + Groq synthesis pipeline.
   // The server holds SERPER_API_KEY + GROQ_API_KEY, so answers are real,
-  // sourced Google results — NOT bare Wikipedia extracts.
+  // sourced Google results — used when on-device can't produce an answer.
   // ---------------------------------------------------------------------
   console.log('[AI] Attempting server answer (Serper+Groq) for:', safeQuestion);
   try {
@@ -892,29 +913,12 @@ export async function getAIAnswer(question, language = 'tr') {
       persistAIAnswer(safeQuestion, serverAnswer).catch(() => {});
       return serverAnswer;
     }
-    console.warn('[AI] Server answer returned null/empty — falling back to device');
+    console.warn('[AI] Server answer returned null/empty — returning safe guidance');
   } catch (error) {
     // Surface the warming-up signal to the caller (don't swallow it).
     if (error.isWarmingUp) throw error;
-    console.warn('[AI] Server answer failed, falling back to device:', error?.message || error);
+    console.warn('[AI] Server answer failed, returning safe guidance:', error?.message || error);
   }
-
-  // Secondary (offline fallback only): free keyless on-device web search
-  // (DDG → Wikipedia → search URL fallback). Runs ONLY when the server is
-  // unreachable (offline / Render sleeping / old deployment).
-  console.log('[AI] Attempting on-device web search fallback for:', safeQuestion);
-  try {
-    const webAnswer = await getWebSearchAnswer(safeQuestion, language);
-    if (webAnswer) {
-      console.log('[AI] On-device search succeeded, provider:', webAnswer.provider);
-      persistAIAnswer(safeQuestion, webAnswer).catch(() => {});
-      return webAnswer;
-    }
-    console.warn('[AI] On-device search returned null/empty');
-  } catch (error) {
-    console.warn('[AI] On-device search failed:', error?.message || error);
-  }
-
   // Nothing worked — surface a friendly, actionable message.
   console.error('[AI] All providers failed for question:', safeQuestion);
   const tr = language === 'tr';
