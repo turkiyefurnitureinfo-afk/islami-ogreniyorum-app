@@ -19,7 +19,7 @@ import {
 } from './data.js';
 import { translations } from './translations.js';
 import { computeTimes, formatClock, fetchJsonWithRetry, sanitizeTimings } from './utils.js';
-import { sameId, hasRealContent, normalizeServerQA, normalizeServerCommunityPost, mergeQA, mergeCommunityPosts, onlyRealUserPosts } from './feedSync.js';
+import { sameId, hasRealContent, normalizeServerQA, normalizeServerCommunityPost, mergeQA, mergeCommunityPosts, onlyRealUserPosts, absolutizeMediaRef } from './feedSync.js';
 import { getDeviceLocale, localeToLanguage } from './locale.js';
 import { detectLocation, autoDetectLocation } from './locationService.js';
 import { makeStyles } from './styles.js';
@@ -1849,21 +1849,26 @@ const [profileDirectory, setProfileDirectory] = useState({});
               // silently stripping media from posts stored by older app
               // versions (which saved relative /uploads/<name> paths).
               .map((d) => {
-                if (
-                  d.mediaUri &&
-                  typeof d.mediaUri === 'string' &&
-                  !/^https?:\/\//i.test(d.mediaUri.trim())
-                ) {
-                  return {
-                    ...d,
-                    mediaUri: d.mediaUri.trim().startsWith('/')
-                      ? `${API_URL}${d.mediaUri.trim()}`
-                      : d.mediaUri.trim(),
-                  };
+                // Normalize EVERY field name the backend/older clients have
+                // used for the media reference — not just mediaUri. A row
+                // carrying mediaUrl/imageUrl (or a gs:// object URI) previously
+                // sailed past this conversion and was then nulled out by
+                // normalizeServerCommunityPost's http(s) check, so the post
+                // lost its media entirely.
+                const out = { ...d };
+                for (const key of [
+                  'mediaUri',
+                  'mediaUrl',
+                  'media_url',
+                  'imageUrl',
+                  'image_url',
+                ]) {
+                  const abs = absolutizeMediaRef(out[key], API_URL);
+                  if (abs) out[key] = abs;
                 }
-                return d;
+                return out;
               })
-              .map((d) => normalizeServerCommunityPost(d, language))
+              .map((d) => normalizeServerCommunityPost(d, language, API_URL))
           );
           // Warm the on-disk avatar cache while online so pictures survive offline.
           precacheAvatars([

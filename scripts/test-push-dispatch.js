@@ -9,6 +9,8 @@ const {
   channelForTrigger,
   buildPushMessage,
   sendPushChunks,
+  collectReceiptIds,
+  fetchPushReceipts,
 } = require('../server/push-dispatch.js');
 
 let pass = 0, fail = 0;
@@ -106,6 +108,72 @@ T('sendPushChunks no client → no-expo-client', resD.reason === 'no-expo-client
 // Non-array messages → treated as empty.
 const resE = await sendPushChunks({ sendPushNotificationsAsync: async () => [] }, null);
 T('sendPushChunks null messages → empty ok', resE.sent === 0 && resE.ok === false);
+
+// --- tickets are propagated so receipts can be checked later ---
+const fakeF = makeFakeExpo();
+const resF = await sendPushChunks(fakeF.client, mAny(3));
+T('sendPushChunks returns tickets array', Array.isArray(resF.tickets) && resF.tickets.length === 3);
+T('sendPushChunks maps each ticket back to its token',
+  resF.tickets[0].token === 't0' && resF.tickets[2].token === 't2');
+
+// --- collectReceiptIds ---
+T('collectReceiptIds keeps only accepted tickets',
+  collectReceiptIds([
+    { status: 'ok', id: 'r1' },
+    { status: 'error', message: 'nope' },
+    { status: 'ok' }, // no id → not pollable
+  ]).join(',') === 'r1');
+T('collectReceiptIds null-safe', collectReceiptIds(null).length === 0);
+
+// --- fetchPushReceipts: the ONLY place Expo reports real delivery failures ---
+const receiptErrors = [];
+const fakeG = {
+  async sendPushNotificationsAsync(chunk) {
+    return chunk.map((_m, i) => ({ status: 'ok', id: 'rc' + i }));
+  },
+  async getPushNotificationReceiptsAsync(ids) {
+    const out = {};
+    for (const id of ids) {
+      out[id] = id === 'rc1'
+        ? { status: 'error', message: 'Device not registered', details: { error: 'DeviceNotRegistered' } }
+        : { status: 'ok' };
+    }
+    return out;
+  },
+};
+const sentG = await sendPushChunks(fakeG, mAny(3));
+const recG = await fetchPushReceipts(fakeG, sentG.tickets, {
+  delayMs: 0,
+  onReceiptError: (r) => receiptErrors.push(r),
+});
+T('fetchPushReceipts checked receipts', recG.checked === true);
+T('fetchPushReceipts surfaces DeviceNotRegistered',
+  recG.errors.length === 1 && recG.errors[0].details.error === 'DeviceNotRegistered');
+T('fetchPushReceipts maps the failing receipt back to its token',
+  recG.errors[0].token === 't1');
+T('fetchPushReceipts invokes onReceiptError callback', receiptErrors.length === 1);
+
+// No accepted tickets → nothing to poll, no API call needed.
+const recH = await fetchPushReceipts(
+  { async getPushNotificationReceiptsAsync() { throw new Error('should not be called'); } },
+  [{ status: 'error', message: 'rejected' }],
+  { delayMs: 0 }
+);
+T('fetchPushReceipts skips when no ticket was accepted',
+  recH.checked === false && recH.errors.length === 0);
+
+// Missing client method → graceful, never throws.
+const recI = await fetchPushReceipts(null, [{ status: 'ok', id: 'x' }], { delayMs: 0 });
+T('fetchPushReceipts no client → not checked', recI.checked === false);
+
+// A throwing receipts endpoint must degrade, not crash the dispatcher.
+const recJ = await fetchPushReceipts(
+  { async getPushNotificationReceiptsAsync() { throw new Error('network down'); } },
+  [{ status: 'ok', id: 'x', token: 't0' }],
+  { delayMs: 0 }
+);
+T('fetchPushReceipts survives a throwing endpoint',
+  recJ.checked === true && recJ.errors.length === 1 && /network down/.test(recJ.errors[0].message));
 }
 
 main().then(() => {

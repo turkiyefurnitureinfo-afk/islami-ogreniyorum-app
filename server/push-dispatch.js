@@ -109,23 +109,102 @@ async function sendPushChunks(expoClient, messages, opts = {}) {
 
   let sent = 0;
   let failed = 0;
+  const tickets = [];
   for (const chunk of chunks) {
     try {
-      const tickets = (await expoClient.sendPushNotificationsAsync(chunk)) || [];
-      for (const ticket of Array.isArray(tickets) ? tickets : []) {
+      const chunkTickets = (await expoClient.sendPushNotificationsAsync(chunk)) || [];
+      const list = Array.isArray(chunkTickets) ? chunkTickets : [];
+      for (let i = 0; i < list.length; i += 1) {
+        const ticket = list[i];
         if (ticket && ticket.status === 'error') {
           failed += 1;
           if (typeof onTicketError === 'function') onTicketError(ticket);
         } else {
           sent += 1;
         }
+        // Remember which token produced this ticket so a later receipt check
+        // can name the affected device (Expo reports delivery problems in the
+        // receipts, never in the ticket itself).
+        tickets.push({ ...(ticket || {}), token: chunk[i] && chunk[i].to });
       }
     } catch (error) {
       failed += chunk.length;
       if (typeof onChunkError === 'function') onChunkError(error, chunk);
     }
   }
-  return { ok: sent > 0, sent, failed };
+  return { ok: sent > 0, sent, failed, tickets };
+}
+
+/**
+ * Collect the ids of tickets Expo ACCEPTED (status 'ok').
+ *
+ * A ticket with status 'ok' is NOT proof of delivery: Expo only reports the
+ * real delivery failures — `DeviceNotRegistered`, `MismatchSenderId`,
+ * `InvalidCredentials`, `MessageTooBig`, `MessageRateExceeded` — in the
+ * RECEIPTS. Without a receipt check a send can report success and still
+ * deliver nothing.
+ *
+ * @param {Array<object>} tickets - as returned by sendPushChunks
+ * @returns {string[]}
+ */
+function collectReceiptIds(tickets) {
+  const ids = [];
+  for (const t of Array.isArray(tickets) ? tickets : []) {
+    if (t && t.status === 'ok' && t.id) ids.push(t.id);
+  }
+  return ids;
+}
+
+/**
+ * Fetch delivery receipts for accepted tickets and surface per-device errors.
+ * NEVER throws; resolves with the errors it observed.
+ *
+ * Expo needs a beat to process receipts, hence the default delay. Callers on a
+ * request path must NOT await this (it would hold the HTTP response open) —
+ * fire it detached instead.
+ *
+ * @param {object} expoClient - exposes getPushNotificationReceiptsAsync(ids)
+ * @param {Array<object>} tickets - from sendPushChunks
+ * @param {object} [opts]
+ * @param {number} [opts.delayMs=15000] - wait before asking Expo
+ * @param {(receipt:object) => void} [opts.onReceiptError]
+ * @returns {Promise<{checked:boolean, errors:Array<object>}>}
+ */
+async function fetchPushReceipts(expoClient, tickets, opts = {}) {
+  const { delayMs = 15000, onReceiptError } = opts;
+  const ids = collectReceiptIds(tickets);
+  if (ids.length === 0) return { checked: false, errors: [] };
+  if (!expoClient || typeof expoClient.getPushNotificationReceiptsAsync !== 'function') {
+    return { checked: false, errors: [] };
+  }
+  const tokenById = {};
+  for (const t of Array.isArray(tickets) ? tickets : []) {
+    if (t && t.id) tokenById[t.id] = t.token || null;
+  }
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  const errors = [];
+  try {
+    const receipts = (await expoClient.getPushNotificationReceiptsAsync(ids)) || {};
+    for (const id of Object.keys(receipts)) {
+      const receipt = receipts[id];
+      if (receipt && receipt.status === 'error') {
+        const entry = { id, token: tokenById[id] || null, ...receipt };
+        errors.push(entry);
+        if (typeof onReceiptError === 'function') onReceiptError(entry);
+      }
+    }
+  } catch (error) {
+    errors.push({
+      id: null,
+      token: null,
+      status: 'error',
+      message: (error && error.message) || String(error),
+    });
+    if (typeof onReceiptError === 'function') onReceiptError(errors[errors.length - 1]);
+  }
+  return { checked: true, errors };
 }
 
 module.exports = {
@@ -134,4 +213,6 @@ module.exports = {
   channelForTrigger,
   buildPushMessage,
   sendPushChunks,
+  collectReceiptIds,
+  fetchPushReceipts,
 };

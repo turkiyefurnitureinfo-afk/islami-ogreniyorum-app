@@ -402,8 +402,9 @@ export function describeAIError(error, language = 'tr') {
  *
  * @param {string} text - text to translate
  * @returns {Promise<{ translated: string, sourceLang: 'tr'|'en', targetLang: 'tr'|'en' }>}
+ *   Falls back through server → MyMemory → glossary → throws.
  */
-export async function translateText(text) {
+export async function translateText(text, opts = {}) {
   if (!text || typeof text !== 'string') {
     throw new Error('Text must be a non-empty string');
   }
@@ -415,7 +416,22 @@ export async function translateText(text) {
   const sourceLang = looksLikeTurkish(safeText) ? 'tr' : 'en';
   const targetLang = sourceLang === 'tr' ? 'en' : 'tr';
 
-  // --- 1. MyMemory (free, keyless translation API) ------------------------
+  // --- 1. Server-side Groq translation (highest quality, same free tier the
+  //     server already pays for; no extra cost). Falls back to MyMemory/glossary
+  //     when the server is unreachable or GROQ_API_KEY is not configured. -------
+  if (!opts.skipServer) {
+    try {
+      const result = await fetchFromServerTranslate(safeText, sourceLang, targetLang);
+      if (result) {
+        return { translated: result, sourceLang, targetLang };
+      }
+    } catch (error) {
+      // Server unreachable / misconfigured — fall through to keyless providers.
+      console.warn('[translateText] Server translation skipped:', error?.message || error);
+    }
+  }
+
+  // --- 2. MyMemory (free, keyless translation API) ------------------------
   try {
     const params = new URLSearchParams({
       q: safeText,
@@ -436,7 +452,7 @@ export async function translateText(text) {
     console.warn('MyMemory translate failed:', error?.message || error);
   }
 
-  // --- 2. Offline glossary fallback ---------------------------------------
+  // --- 3. Offline glossary fallback ---------------------------------------
   const glossary = glossaryTranslate(safeText, sourceLang);
   if (glossary) {
     return { translated: glossary, sourceLang, targetLang };
@@ -447,6 +463,25 @@ export async function translateText(text) {
       ? 'Çeviri şu anda kullanılamıyor. Lütfen tekrar deneyin.'
       : 'Translation is unavailable right now. Please try again.'
   );
+}
+
+/**
+ * Call the app's own backend to translate via Groq (free — same API key the
+ * server already uses for AI answers). Returns the translated string, or null
+ * when the server is unreachable / not configured (caller falls back).
+ */
+async function fetchFromServerTranslate(text, sourceLang, targetLang) {
+  const url = `${API_URL}/api/ai/translate`;
+  const body = { text, sourceLang, targetLang };
+  const data = await fetchJson(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }).catch(() => null);
+  if (!data || !data.success || typeof data.translated !== 'string') {
+    return null;
+  }
+  return data.translated.trim() || null;
 }
 
 /**

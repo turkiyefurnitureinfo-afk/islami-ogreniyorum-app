@@ -35,6 +35,76 @@ function PostVideo({ uri, style }) {
 }
 
 /**
+ * Community post photo with a loading state, one bounded automatic retry, and
+ * a tap-to-retry placeholder.
+ *
+ * WHY this replaced the old inline renderer: the previous implementation wrote
+ * a PERMANENT `mediaBroken: true` flag onto the shared post object from inside
+ * the image error handler. One transient failure — a cold-starting backend, a
+ * dropped packet, a media file that had not finished propagating — marked that
+ * post as broken forever with no recovery path, and because it wrote to parent
+ * state it could re-render endlessly. Local state keyed on the URI fixes both:
+ * the retry is bounded (never a loop), a changed URI resets everything, and the
+ * user can always tap the placeholder to try again.
+ */
+function PostMediaImage({ uri, style, placeholderStyle, textStyle, label, retryLabel }) {
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  // Track the last URI in state instead of setState-during-render (React-safe).
+  const [lastUri, setLastUri] = useState(uri);
+  if (lastUri !== uri) {
+    setLastUri(uri);
+    setLoading(true);
+    setFailed(false);
+    setAttempt(0);
+  }
+
+  if (failed) {
+    return (
+      <Pressable
+        style={[placeholderStyle, style]}
+        accessibilityRole="imagebutton"
+        onPress={() => {
+          // Manual retry: reset and remount with a fresh key.
+          setLoading(true);
+          setFailed(false);
+          setAttempt(0);
+        }}
+      >
+        <Text style={textStyle}>{label}</Text>
+        {retryLabel ? <Text style={textStyle}>{retryLabel}</Text> : null}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View>
+      <Image
+        key={`${uri}#${attempt}`}
+        source={{ uri }}
+        style={style}
+        accessibilityRole="image"
+        onLoadStart={() => setLoading(true)}
+        onLoad={() => setLoading(false)}
+        onError={() => {
+          setLoading(false);
+          // One automatic retry absorbs transient blips (server cold start,
+          // roaming). Only a second consecutive failure shows the placeholder.
+          if (attempt === 0) setAttempt(1);
+          else setFailed(true);
+        }}
+      />
+      {loading ? (
+        <View style={[placeholderStyle, style, { position: 'absolute', top: 0, left: 0 }]}>
+          <ActivityIndicator size="small" color="#999" />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * Avatar that renders from the on-disk cache first (works offline). The emoji
  * fallback only appears when the user genuinely has no profile picture. When a
  * URL exists but can't load (e.g. offline + uncached), a neutral placeholder
@@ -352,19 +422,6 @@ const CommunityTab = ({
             <View style={styles.communityPostMedia}>
               {post.media.type === 'image' ? (
                 (() => {
-                  // BUG FIX: check mediaBroken BEFORE attempting to render.
-                  // Previously this flag was set on image load error but never
-                  // read — causing an infinite re-render loop (image fails →
-                  // onError → setCommunityPosts → re-render → image fails → …).
-                  if (post.mediaBroken) {
-                    return (
-                      <View style={[styles.communityMediaBroken, styles.communityPostImage]}>
-                        <Text style={styles.communityMediaBrokenText}>
-                          {t?.mediaUnavailable || '🖼️ Media unavailable'}
-                        </Text>
-                      </View>
-                    );
-                  }
                   const validUri = validateMediaUrl(post.media.uri);
                   if (!validUri) {
                     return (
@@ -376,18 +433,15 @@ const CommunityTab = ({
                     );
                   }
                   return (
-                    <Image
-                      source={{ uri: validUri }}
+                    <PostMediaImage
+                      uri={validUri}
                       style={styles.communityPostImage}
-                      onError={() => {
-                        // Mark this post's media as broken so the fallback
-                        // renders on next render instead of a broken image.
-                        setCommunityPosts((prev) =>
-                          prev.map((p) =>
-                            p.id === post.id ? { ...p, mediaBroken: true } : p
-                          )
-                        );
-                      }}
+                      placeholderStyle={styles.communityMediaBroken}
+                      textStyle={styles.communityMediaBrokenText}
+                      label={t?.mediaUnavailable || '🖼️ Media unavailable'}
+                      retryLabel={
+                        language === 'tr' ? 'Tekrar denemek için dokun' : 'Tap to retry'
+                      }
                     />
                   );
                 })()

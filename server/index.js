@@ -11,7 +11,7 @@ const { requireVerifiedUser } = require('./verify');
 // Pure, dependency-free push helpers (chunking / sanitization / message
 // building / channel routing) so the dispatch logic is unit-testable without
 // booting an HTTP server — see scripts/test-push-dispatch.js.
-const { sanitizeText, channelForTrigger, buildPushMessage, sendPushChunks } = require('./push-dispatch');
+const { sanitizeText, channelForTrigger, buildPushMessage, sendPushChunks, fetchPushReceipts } = require('./push-dispatch');
 
 const app = express();
 
@@ -192,6 +192,17 @@ const COMMUNITY_CHANNEL_ID = 'community-activity';
 const expo = new Expo({
   accessToken: process.env.EXPO_ACCESS_TOKEN,
 });
+// Visibility: an absent access token is the #1 cause of "tickets never arrive".
+// The value is never logged — only whether it resolved.
+if (!process.env.EXPO_ACCESS_TOKEN) {
+  console.warn(
+    '[push] EXPO_ACCESS_TOKEN is NOT set. Sends will be rejected (401) if the ' +
+      'Expo project enforces push security. Set it on the host from ' +
+      'https://expo.dev/settings/access-tokens'
+  );
+} else {
+  console.log('[push] EXPO_ACCESS_TOKEN configured');
+}
 
 // Persistent data layer: Firestore when a service-account key is present,
 // automatic in-memory fallback otherwise. See ./storage.js for the schema.
@@ -333,7 +344,18 @@ async function computeRecipients(trigger, triggerUserId, entityId) {
 async function dispatchNotification({ trigger, triggerUserId, entityId, title, body, data = {} }) {
   try {
     const recipientIds = await computeRecipients(trigger, triggerUserId, entityId);
-    if (!recipientIds || recipientIds.length === 0) return { ok: true, sent: 0 };
+    if (!recipientIds || recipientIds.length === 0) {
+      // IMPORTANT: routing always EXCLUDES the triggering user, so a
+      // single-device / single-account test produces zero recipients and
+      // therefore zero pushes. Log it loudly instead of returning silently —
+      // otherwise this reads as "push is broken" when it is working as designed.
+      console.warn(
+        `[dispatch] ${trigger} -> NO RECIPIENTS (triggered by ${triggerUserId}). ` +
+          'Recipients exclude the triggering user; register a SECOND device/' +
+          'account to observe a notification.'
+      );
+      return { ok: true, sent: 0, reason: 'no-recipients' };
+    }
 
     // Batch-fetch device tokens once per recipient (avoids N+1 getDevice calls).
     // allSettled so one storage failure never aborts the whole dispatch.
@@ -356,8 +378,20 @@ async function dispatchNotification({ trigger, triggerUserId, entityId, title, b
     for (const uid of recipientIds) {
       const device = devicesByUser[uid];
       const token = device && device.expoPushToken;
-      if (!token || seen.has(token)) continue;
-      if (!isValidExpoToken(token)) continue; // malformed tokens are skipped, never crash chunking
+      if (!token) {
+        console.warn(`[dispatch] no push token stored for recipient ${uid} — skipped`);
+        continue;
+      }
+      if (seen.has(token)) continue;
+      if (!isValidExpoToken(token)) {
+        // A raw FCM/APNs token (or a malformed value) lands here. Expo requires
+        // an ExponentPushToken[...] — silently skipping hid this completely.
+        console.warn(
+          `[dispatch] INVALID Expo token for ${uid}: "${String(token).slice(0, 28)}..." — ` +
+            'expected the ExponentPushToken[...] form returned by getExpoPushTokenAsync'
+        );
+        continue;
+      }
       seen.add(token);
       // Route community/Q&A activity through the dedicated channel so users can
       // mute them independently of prayer times.
@@ -375,10 +409,32 @@ async function dispatchNotification({ trigger, triggerUserId, entityId, title, b
     if (messages.length === 0) return { ok: true, sent: 0 };
 
     const result = await sendPushChunks(expo, messages, {
-      onTicketError: (t) => console.warn('[dispatch] ticket error:', t.message || t.details || 'unknown'),
+      // Expo reports per-token rejections here (invalid token, malformed
+      // payload). details.error carries the machine-readable reason.
+      onTicketError: (t) =>
+        console.warn(
+          '[dispatch] ticket error:',
+          t.message || (t.details && t.details.error) || 'unknown'
+        ),
       onChunkError: (error) => console.error('[dispatch] push send failed:', error?.message || error),
     });
     console.log(`[dispatch] ${trigger} -> ${result.sent}/${messages.length} push(es) sent (triggered by ${triggerUserId})`);
+
+    // A ticket with status 'ok' only means Expo ACCEPTED the message — the
+    // real delivery failures (DeviceNotRegistered, MismatchSenderId,
+    // InvalidCredentials) arrive in the RECEIPTS ~15s later. Detached on
+    // purpose: awaiting this would hold the post/comment request open longer
+    // than the app's own 15s timeout.
+    void fetchPushReceipts(expo, result.tickets, {
+      onReceiptError: (r) =>
+        console.error(
+          '[dispatch] RECEIPT ERROR',
+          (r.details && r.details.error) || r.message || 'unknown',
+          '| token:',
+          r.token ? `${String(r.token).slice(0, 28)}...` : '(unmapped)'
+        ),
+    });
+
     return { ok: true, sent: result.sent };
   } catch (error) {
     console.error('[dispatch] dispatchNotification failed:', error?.message || error);
@@ -528,13 +584,46 @@ app.get('/uploads/:name', async (req, res) => {
     return res.status(400).json({ error: 'Bad name' });
   }
   try {
+    // 1) Disk (the fallback used when Firebase Storage is unavailable). The
+    //    static middleware above usually handles this, but re-checking makes
+    //    the route self-sufficient if the file appeared after startup.
+    const diskPath = path.join(UPLOADS_DIR, name);
+    if (fs.existsSync(diskPath)) {
+      return res.sendFile(diskPath);
+    }
+
+    // 2) Storage: PROXY the bytes rather than redirecting. Android's image
+    //    pipeline does not reliably follow a cross-host redirect, which can
+    //    present as a broken image even though the object exists.
+    const object = await storageUploads.getObjectStream(name);
+    if (object) {
+      res.set('Content-Type', object.contentType || 'application/octet-stream');
+      if (object.size) res.set('Content-Length', String(object.size));
+      res.set('Cache-Control', 'public, max-age=604800'); // 7d, as before
+      res.set('X-Content-Type-Options', 'nosniff');
+      object.stream.on('error', (error) => {
+        console.error('[uploads] stream error:', error && error.message);
+        try {
+          res.destroy();
+        } catch (_e) {
+          // Response already gone.
+        }
+      });
+      console.log(`[uploads] served ${name} from Storage (${object.contentType})`);
+      return object.stream.pipe(res);
+    }
+
+    // 3) Last resort for clients/hosts where streaming is not possible.
     const signed = await storageUploads.getSignedUrl(name);
-    if (signed) return res.redirect(302, signed);
-    // No Storage on this host: the file must be on disk (static handled it)
-    // or it genuinely doesn't exist.
+    if (signed) {
+      console.log(`[uploads] redirected ${name} to a signed URL`);
+      return res.redirect(302, signed);
+    }
+
+    console.warn(`[uploads] ${name} NOT FOUND in Storage or on disk`);
     return res.status(404).json({ error: 'Not found' });
   } catch (error) {
-    console.error('[uploads] signed-url error:', error && error.message);
+    console.error('[uploads] serve error:', error && error.message);
     return res.status(404).json({ error: 'Not found' });
   }
 });
@@ -1286,40 +1375,127 @@ app.post('/api/ai/chat', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// AI: Web-search answer (no LLM required) — legacy endpoint
-// Returns sourced answers from Serper.dev (Google results) / DuckDuckGo /
-// Wikipedia. Kept for backward compat; prefer /api/ai/chat for the new
-// search + LLM synthesis pipeline.
+// AI: Server-side translation endpoint — free (Groq LLM + MyMemory fallback).
+// Uses the same GROQ_API_KEY the server already pays for; no extra provider cost.
 // ---------------------------------------------------------------------------
-app.post('/api/ai/search', async (req, res) => {
-  const { question, language } = req.body;
-  if (
-    !question ||
-    typeof question !== 'string' ||
-    question.trim().length < 3
-  ) {
-    return res.status(400).json({ error: 'question is required' });
-  }
-  const safeQuestion = question.trim().slice(0, 1000);
 
+app.post('/api/ai/translate', async (req, res) => {
+  const t0 = Date.now();
   try {
-    const { getSearchAnswer } = require('./search-answer');
-    const result = await getSearchAnswer(safeQuestion, language === 'en' ? 'en' : 'tr');
-    if (!result) {
-      return res.json({ success: false, error: 'No search results found' });
+    const { text, from = 'tr', to = 'en', fallbackPolicy = 'cheap-first' } = req.body || {};
+    const safeText = typeof text === 'string' ? text.trim() : '';
+    if (!safeText) {
+      return res.status(400).json({ error: 'text is required' });
     }
-    res.json({
-      success: true,
-      answer: result.answer,
+    const MAX_INPUT_CHARS = 2500;
+    const cappedText = safeText.slice(0, MAX_INPUT_CHARS);
+    const wasCapped = safeText.length > MAX_INPUT_CHARS;
+
+    const logMeta = (provider, textOut, isFallback, extra = '') => {
+      const chars = (textOut || '').length;
+      console.info(
+        '[translate] provider=' + provider + ' fallback=' + isFallback + ' ' +
+        'in=' + cappedText.length + ' out=' + chars + ' elapsed_ms=' + (Date.now() - t0) +
+        (wasCapped ? ' (input_capped)' : '') + extra
+      );
+    };
+
+    const normalizeLang = (lang) => {
+      if (lang === 'tr' || lang.toLowerCase().startsWith('tr')) return 'Turkish';
+      if (lang === 'en' || lang.toLowerCase().startsWith('en')) return 'English';
+      return String(lang || 'English');
+    };
+
+    // ---------------- Provider 1: Groq (server already pays for this) ----------------
+    const tryGroq = async () => {
+      const { getGroqChatCompletion } = require('./services/groqService');
+      const sourceLang = normalizeLang(from);
+      const targetLang = normalizeLang(to);
+      const systemMsg = 'You are a translation engine. Translate the given text faithfully ' +
+        'into the target language. Return ONLY the translated text, with no prefix, no notes, ' +
+        'no quotes, no markdown, no explanation. Preserve all proper nouns, numbers, and punctuation.';
+      const userMsg = 'Translate the following ' + sourceLang + ' text into ' + targetLang + ':\n\n' + cappedText;
+      const out = await getGroqChatCompletion([
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: userMsg },
+      ]);
+      logMeta('groq', out, false);
+      return { provider: 'groq', text: out, isFallback: false, charCount: out.length };
+    };
+
+    // ---------------- Provider 2: MyMemory (free, keyless, ~5000 chars/day/IP) ----------------
+    const tryMyMemory = async () => {
+      const MM_BASE = 'https://api.mymemory.translated.net/get';
+      const qs = new URLSearchParams({
+        q: cappedText,
+        langpair: (from || 'tr') + '|' + (to || 'en'),
+      }).toString();
+      const mmRes = await fetch(MM_BASE + '?' + qs, {
+        signal: req.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!mmRes.ok) return null;
+      let mmData = null;
+      try { mmData = await mmRes.json(); } catch { return null; }
+      const match = mmData && mmData.responseData && mmData.responseData.translatedText;
+      if (typeof match !== 'string' || !match.trim()) return null;
+      let out = match.trim();
+      logMeta('mymemory', out, true);
+      return { provider: 'mymemory', text: out, isFallback: true, charCount: out.length };
+    };
+
+    // ---------------- Offline glossary (tiny UI strings only) ----------------
+    const tryOfflineGlossary = () => {
+      const GLOSSARY = {
+        'merhaba': 'hello', 'selam': 'hello', 'nasılsın': 'how are you', 'teşekkürler': 'thanks',
+        'ler': 'ler', 'lar': 'lar',
+      };
+      const key = safeText.toLowerCase().slice(0, 40);
+      return GLOSSARY[key] ? { provider: 'glossary', text: GLOSSARY[key], isFallback: true, charCount: GLOSSARY[key].length } : null;
+    };
+
+    let result = null;
+    if (fallbackPolicy !== 'mymemory-first') {
+      try { result = await tryGroq(); } catch (groqErr) {
+        console.warn('[translate] Groq failed, falling back to MyMemory:', groqErr?.message || groqErr);
+      }
+    }
+    if (!result) {
+      try { result = await tryMyMemory(); } catch (mmErr) {
+        console.warn('[translate] MyMemory failed, no fallback provider available:', mmErr?.message || mmErr);
+      }
+    }
+    if (!result) {
+      const glossary = tryOfflineGlossary();
+      result = glossary || {
+        provider: 'unavailable',
+        text: from === 'tr'
+          ? 'Çeviri şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.'
+          : 'Translation is currently unavailable. Please try again later.',
+        isFallback: true,
+        charCount: 0,
+      };
+    }
+
+    return res.json({
       provider: result.provider,
-      sources: result.sources,
+      text: result.text,
+      isFallback: !!result.isFallback,
+      charCount: result.charCount,
+      inputCapped: wasCapped,
     });
   } catch (error) {
-    console.error('Search answer error:', error.message);
-    res.status(500).json({ error: 'Failed to get search answer' });
+    console.error('[translate] unhandled error:', error?.message || error);
+    return res.status(500).json({
+      provider: 'error',
+      text: from === 'tr' ? 'Çeviri Hatası' : 'Translation error',
+      isFallback: true,
+      charCount: 0,
+    });
   }
 });
 
+// ---------------------------------------------------------------------------
 // Health check
 app.get('/api/health', async (req, res) => {
   try {

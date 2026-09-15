@@ -76,6 +76,67 @@ const cp = feedSync.normalizeServerCommunityPost({
 T('community comment uses commenterEmail', cp.comments[0].commenterEmail === 'u@x.c');
 T('community post media null when absent', cp.media === null);
 
+// --- normalizeServerCommunityPost: media must survive (the "upload succeeded
+// but the image never appears" bug). mediaType is metadata, not a gate, and a
+// server-RELATIVE path must be absolutized rather than silently discarded.
+const API = 'https://api.example.com';
+
+const mediaNoType = feedSync.normalizeServerCommunityPost(
+  { id: 'p2', ownerUserId: 'o@x.c', text: 'pic', mediaUri: 'https://cdn.x/a.jpg' },
+  'tr',
+  API
+);
+T('media survives when mediaType is missing', !!mediaNoType.media && mediaNoType.media.uri === 'https://cdn.x/a.jpg');
+T('media type inferred as image', mediaNoType.media.type === 'image');
+
+const mediaRelative = feedSync.normalizeServerCommunityPost(
+  { id: 'p3', ownerUserId: 'o@x.c', text: 'pic', mediaUri: '/uploads/123-ab.jpg', mediaType: 'image' },
+  'tr',
+  API
+);
+T('server-relative mediaUri is absolutized, not dropped',
+  !!mediaRelative.media && mediaRelative.media.uri === API + '/uploads/123-ab.jpg');
+
+const mediaGs = feedSync.normalizeServerCommunityPost(
+  { id: 'p4', ownerUserId: 'o@x.c', mediaUri: 'gs://bucket.firebasestorage.app/123-ab.jpg' },
+  'tr',
+  API
+);
+T('gs:// object URI routes through the signed-URL gateway',
+  !!mediaGs.media && mediaGs.media.uri === API + '/uploads/123-ab.jpg');
+
+const mediaAltField = feedSync.normalizeServerCommunityPost(
+  { id: 'p5', ownerUserId: 'o@x.c', mediaUrl: 'https://cdn.x/b.mp4' },
+  'tr',
+  API
+);
+T('mediaUrl alt field is honored', !!mediaAltField.media && mediaAltField.media.uri === 'https://cdn.x/b.mp4');
+T('video type inferred from extension', mediaAltField.media.type === 'video');
+
+const mediaLocalOnly = feedSync.normalizeServerCommunityPost(
+  { id: 'p6', ownerUserId: 'o@x.c', mediaUri: 'file:///data/user/0/cache/x.jpg', mediaType: 'image' },
+  'tr',
+  API
+);
+T('local file:// media stays dropped (not renderable elsewhere)', mediaLocalOnly.media === null);
+
+// --- inferMediaType ---
+T('inferMediaType honors explicit image', feedSync.inferMediaType('image', 'https://x/y') === 'image');
+T('inferMediaType honors mime video', feedSync.inferMediaType('video/mp4', 'https://x/y') === 'video');
+T('inferMediaType defaults to image', feedSync.inferMediaType(null, 'https://x/y') === 'image');
+T('inferMediaType ignores query string when sniffing ext',
+  feedSync.inferMediaType(null, 'https://x/y.mp4?token=1') === 'video');
+
+// --- absolutizeMediaRef ---
+T('absolutizeMediaRef passes https through', feedSync.absolutizeMediaRef('https://x/a.jpg', API) === 'https://x/a.jpg');
+T('absolutizeMediaRef upgrades protocol-relative', feedSync.absolutizeMediaRef('//x/a.jpg', API) === 'https://x/a.jpg');
+T('absolutizeMediaRef joins server-relative', feedSync.absolutizeMediaRef('/uploads/a.jpg', API) === API + '/uploads/a.jpg');
+T('absolutizeMediaRef maps gs:// to the gateway', feedSync.absolutizeMediaRef('gs://b/a.jpg', API) === API + '/uploads/a.jpg');
+T('absolutizeMediaRef rejects file://', feedSync.absolutizeMediaRef('file:///a.jpg', API) === null);
+T('absolutizeMediaRef rejects data:', feedSync.absolutizeMediaRef('data:image/png;base64,AAAA', API) === null);
+T('absolutizeMediaRef rejects non-string', feedSync.absolutizeMediaRef(42, API) === null);
+T('absolutizeMediaRef rejects empty', feedSync.absolutizeMediaRef('   ', API) === null);
+
 // --- mergeQA ---
 const prev = [{ id: 'srv-p1', serverPostId: 'p1', likedByMe: true, ownerEmail: 'who@x' }];
 const freshBase = feedSync.normalizeServerQA({ id: 'p1', question: 'Q?', ownerUserId: 'own@x.c', likes: 9, contributions: [] }, 'tr');
@@ -93,6 +154,32 @@ const prevC = [{ id: 1, serverId: 1, likedByMe: true }];
 const freshC = feedSync.normalizeServerCommunityPost({ id: 1, ownerUserId: 'o@x', text: 't' }, 'tr');
 const mergedC = feedSync.mergeCommunityPosts(prevC, [freshC], new Set());
 T('mergeCommunityPosts preserves likedByMe', mergedC[0].likedByMe === true);
+
+// A server row without media must not erase media the device already renders.
+const prevWithMedia = [{
+  id: 7, serverId: 7, likedByMe: false,
+  user: { name: 'A', avatar: '👤', avatarUrl: null },
+  media: { type: 'image', uri: 'https://cdn.x/kept.jpg' },
+}];
+const freshNoMedia = feedSync.normalizeServerCommunityPost(
+  { id: 7, ownerUserId: 'o@x', text: 't' }, 'tr'
+);
+const mergedMedia = feedSync.mergeCommunityPosts(prevWithMedia, [freshNoMedia], new Set());
+T('mergeCommunityPosts keeps local media when server row lacks it',
+  !!mergedMedia[0].media && mergedMedia[0].media.uri === 'https://cdn.x/kept.jpg');
+
+// A server row WITH media still wins (fresh truth from the backend).
+const prevStaleMedia = [{
+  id: 8, serverId: 8, likedByMe: false,
+  user: { name: 'A', avatar: '', avatarUrl: null },
+  media: { type: 'image', uri: 'https://cdn.x/stale.jpg' },
+}];
+const freshWithMedia = feedSync.normalizeServerCommunityPost(
+  { id: 8, ownerUserId: 'o@x', text: 't', mediaUri: 'https://cdn.x/fresh.jpg' }, 'tr'
+);
+const mergedFresh = feedSync.mergeCommunityPosts(prevStaleMedia, [freshWithMedia], new Set());
+T('mergeCommunityPosts prefers server media when present',
+  !!mergedFresh[0].media && mergedFresh[0].media.uri === 'https://cdn.x/fresh.jpg');
 
 // --- avatar preservation on merge (offline picture fix) ---
 // Server rows created before authorAvatar was stored have no avatar; the

@@ -248,6 +248,40 @@ async function getSignedUrl(name) {
 }
 
 /**
+ * Open a read stream for a private Storage object so the API can PROXY the
+ * bytes instead of 302-redirecting to a signed URL.
+ *
+ * Why proxy instead of redirect: React Native's Android image pipeline does not
+ * reliably follow a cross-host redirect, so an `<Image source={{uri}}>` pointed
+ * at /uploads/<name> could fail even though the object exists — surfacing to
+ * every user as "media unavailable". Serving the bytes from our own host
+ * removes that dependency and lets us send a real Content-Type.
+ *
+ * @param {string} name - object name
+ * @returns {Promise<{stream: NodeJS.ReadableStream, contentType: string, size: number|null}|null>}
+ *   null when Storage is unavailable or the object does not exist.
+ */
+async function getObjectStream(name) {
+  const bucket = await getBucket();
+  if (!bucket) return null;
+  const file = bucket.file(name);
+  try {
+    const [exists] = await file.exists();
+    if (!exists) return null;
+    const [metadata] = await file.getMetadata();
+    return {
+      stream: file.createReadStream(),
+      contentType: (metadata && metadata.contentType) || 'application/octet-stream',
+      // GCS reports size as a string; normalise so Content-Length is numeric.
+      size: metadata && metadata.size ? Number(metadata.size) : null,
+    };
+  } catch (error) {
+    console.warn('[uploads] stream open failed:', error && error.message);
+    return null;
+  }
+}
+
+/**
  * Delete an object (used by tests / future cleanup flows). Silently succeeds
  * when the object is already gone.
  * @param {string} name
@@ -265,7 +299,7 @@ async function deleteObject(name) {
   }
 }
 
-module.exports = { uploadBuffer, getSignedUrl, deleteObject };
+module.exports = { uploadBuffer, getSignedUrl, getObjectStream, deleteObject };
 
 
 

@@ -121,12 +121,73 @@ export function normalizeServerQA(doc, language) {
 }
 
 /**
+ * Convert any media reference the backend or an older client stored into an
+ * absolute http(s) URL the feed can actually render.
+ *
+ * The backend has stored media under several different shapes over time, and
+ * older app builds saved server-RELATIVE paths. Feeding a relative path (or a
+ * `gs://` object URI) straight to the http(s) validator nulls the media out,
+ * which is exactly how an upload that succeeded ends up invisible in the feed:
+ *
+ *   https://host/x.jpg   -> unchanged (signed Storage / /uploads gateway)
+ *   //host/x.jpg         -> https://host/x.jpg
+ *   /uploads/x.jpg       -> ${apiUrl}/uploads/x.jpg
+ *   gs://bucket/x.jpg    -> ${apiUrl}/uploads/x.jpg  (signed-URL gateway)
+ *
+ * Anything else (file://, content://, data:, bare filenames) returns null,
+ * because those are not renderable on another device.
+ *
+ * Takes `apiUrl` as an argument rather than importing config.js so this stays a
+ * pure function that the Node test harness can load without React Native.
+ *
+ * @param {*} raw
+ * @param {string} [apiUrl] - base URL for server-relative references
+ * @returns {string|null}
+ */
+export function absolutizeMediaRef(raw, apiUrl = '') {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+  if (trimmed.startsWith('/')) return `${apiUrl}${trimmed}`;
+  const gs = /^gs:\/\/[^/]+\/(.+)$/i.exec(trimmed);
+  if (gs) return `${apiUrl}/uploads/${gs[1]}`;
+  return null;
+}
+
+/**
+ * Decide whether a stored media reference is an image or a video.
+ *
+ * `mediaType` is METADATA, never a gate: rows written by older clients (and by
+ * the server when the app didn't send a type) carry a media URI with a null
+ * type. When the type is missing or unrecognised we infer it from the file
+ * extension so a perfectly valid image is still rendered instead of dropped.
+ *
+ * @param {*} rawType - stored type ('image', 'video', 'image/jpeg', ...)
+ * @param {string} url - the validated, renderable media URL
+ * @returns {'image'|'video'}
+ */
+export function inferMediaType(rawType, url) {
+  const t = typeof rawType === 'string' ? rawType.trim().toLowerCase() : '';
+  // MIME types ('video/mp4') and bare kinds ('video') both land here.
+  if (t.includes('video')) return 'video';
+  if (t.includes('image')) return 'image';
+  // No usable type: fall back to the extension on the URL path.
+  const path = typeof url === 'string' ? url.split('?')[0] : '';
+  return /\.(mp4|webm|mov|m4v|3gp)$/i.test(path) ? 'video' : 'image';
+}
+
+/**
  * Shape a backend community post document ("communityPosts/{id}") into the
  * app's local post shape.
  * @param {object} doc
  * @param {'tr'|'en'} language
+ * @param {string} [apiUrl] - base URL used to absolutize server-relative media
+ *   references. Optional; App.js passes API_URL so this normalizer is safe even
+ *   when a row slips past the caller's pre-conversion (e.g. a new field name).
  */
-export function normalizeServerCommunityPost(doc, language) {
+export function normalizeServerCommunityPost(doc, language, apiUrl = '') {
   // --- Legacy field name normalization ---
   // Older app versions and server records used different field names. Map all
   // known variants to the canonical shape the UI expects.
@@ -144,16 +205,26 @@ export function normalizeServerCommunityPost(doc, language) {
   // --- URL validation: only allow remote http(s) URLs ---
   // Local file:// paths, data: URIs, and relative paths are NOT renderable
   // across devices and must be nulled out to prevent broken images.
-  console.log(
-    '[normalize-post] rawMediaUrl=',
-    rawMediaUrl ? String(rawMediaUrl).substring(0, 120) : '(none)',
-    '| passes http(s) test:',
-    rawMediaUrl && /^https?:\/\//i.test(String(rawMediaUrl).trim())
-  );
+  //
+  // absolutizeMediaRef runs FIRST so a server-RELATIVE reference (e.g. the
+  // "/uploads/<name>" path older builds persisted) or a `gs://` object URI is
+  // rewritten into an absolute URL instead of being silently discarded here.
+  const absolutizedMedia = absolutizeMediaRef(rawMediaUrl, apiUrl);
   const validMediaUrl =
-    rawMediaUrl && /^https?:\/\//i.test(String(rawMediaUrl).trim())
-      ? String(rawMediaUrl).trim()
-      : null;
+    absolutizedMedia && /^https?:\/\//i.test(absolutizedMedia) ? absolutizedMedia : null;
+  // Only speak up when a media reference actually exists but cannot be
+  // rendered — this normalizer runs for every post on every 10s feed poll, so
+  // unconditional logging would flood the device console.
+  if (rawMediaUrl && !validMediaUrl) {
+    console.warn(
+      '[normalize-post] media reference is not renderable and was dropped:',
+      String(rawMediaUrl).substring(0, 120),
+      '| rawMediaType=',
+      rawMediaType || '(none)',
+      '| apiUrl=',
+      apiUrl || '(none)'
+    );
+  }
   const validAuthorPhoto =
     rawAuthorPhoto && /^https?:\/\//i.test(String(rawAuthorPhoto).trim())
       ? String(rawAuthorPhoto).trim()
@@ -173,10 +244,13 @@ export function normalizeServerCommunityPost(doc, language) {
     timestamp: timeAgo(doc.createdAt, language),
     likes: doc.likes || 0,
     likedByMe: false,
-    media:
-      rawMediaType && validMediaUrl
-        ? { type: rawMediaType.split('/')[0] || 'image', uri: validMediaUrl }
-        : null,
+    // A renderable media URI stands on its own — `mediaType` is metadata, NOT
+    // a gate. Requiring BOTH (as this did) silently dropped every post whose
+    // row carried a URI but no type, which is exactly the "upload succeeds but
+    // the image never appears" symptom. The type is inferred when missing.
+    media: validMediaUrl
+      ? { type: inferMediaType(rawMediaType, validMediaUrl), uri: validMediaUrl }
+      : null,
     comments: (doc.comments || []).map((c) => {
       const cRawPhoto =
         c.authorPhoto || c.author_photo || c.authorAvatar || c.userPhoto || c.photoURL || null;
@@ -303,6 +377,12 @@ export function mergeCommunityPosts(prev, serverP, deletedIds) {
         id: post.id,
         ownerEmail: post.ownerEmail || match.ownerEmail,
         likedByMe: post.likedByMe,
+        // Same reasoning as the avatar fallback below: a server row that lacks
+        // media must not ERASE the media this device already renders. Without
+        // this, a row written before the upload finished (or by an older
+        // client) blanked the author's own image on the next 10s feed poll.
+        // Media is immutable here — editing a post only rewrites its text.
+        media: match.media || post.media || null,
         // Keep the locally-known avatar when the server row predates avatar
         // storage — otherwise a refresh would degrade the picture to emoji.
         user:

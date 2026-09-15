@@ -532,9 +532,22 @@ export async function getExpoPushToken() {
     }
     console.warn('[push-token] calling getExpoPushTokenAsync with projectId=', projectId);
     const token = await Notifications.getExpoPushTokenAsync({ projectId });
+    // Guard: only an Expo push token is meaningful to the Expo push API. A raw
+    // FCM/APNs token here means the native Firebase module produced it (e.g. a
+    // missing EAS projectId silently falls back to FCM), and every send would
+    // be rejected server-side with no visible reason.
+    if (!isExpoTokenFormat(token?.data)) {
+      console.warn(
+        '[push-token] token is NOT in ExponentPushToken[...] form — prefix=',
+        token?.data ? String(token.data).slice(0, 24) : '(none)',
+        '(expected an Expo token; a raw FCM/APNs token cannot be sent via Expo)'
+      );
+      return null;
+    }
     console.warn(
-      '[push-token] getExpoPushTokenAsync result:',
-      token ? `OK (data length=${token.data?.length ?? 'unknown'})` : 'EMPTY/NULL'
+      '[push-token] getExpoPushTokenAsync result: OK (length=' +
+        (token?.data?.length ?? 'unknown') +
+        ')'
     );
     return token?.data || null;
   } catch (error) {
