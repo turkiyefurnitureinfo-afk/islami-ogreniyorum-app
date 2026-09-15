@@ -132,9 +132,13 @@ function getRateLimitCategory(path, method) {
   // Notification endpoints - these should never be rate limited as they are
   // fire-and-forget calls that notify the backend of user activity. Rate limiting
   // them causes notifications to silently fail.
+  // Path check FIRST (before the method-based write check) so POST
+  // /api/community/posts etc. route to the permissive 'notification' bucket
+  // even though the HTTP method is POST.
   if (lowerPath.includes('/posts') || lowerPath.includes('/community') || lowerPath.includes('/like') || lowerPath.includes('/contributions')) {
     return 'notification';
   }
+
 
   // Authentication endpoints
   if (lowerPath.includes('/auth') || lowerPath.includes('/login') || lowerPath.includes('/register')) {

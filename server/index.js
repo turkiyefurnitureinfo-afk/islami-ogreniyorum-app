@@ -203,6 +203,35 @@ if (!process.env.EXPO_ACCESS_TOKEN) {
 } else {
   console.log('[push] EXPO_ACCESS_TOKEN configured');
 }
+// Self-exclusion on broadcast triggers was too narrow: recipients excluded ONLY
+// the triggering userId, so a device that ALSO belongs to that userId was
+// silently dropped from a broadcast (a self-post would never notify its own
+// device on a multi-device test). That is the "notification not firing" pattern
+// in a single-user, multi-device environment. We now ALSO exclude every device
+// whose token belongs to the triggering user, which is the sensible behaviour.
+function bcastRecipientUserIds(devices, triggerUserId) {
+  const excludeTokenSet = new Set();
+  if (triggerUserId) {
+    for (const d of (devices || [])) {
+      if (String(d && d.userId) === String(triggerUserId) && d.expoPushToken) {
+        excludeTokenSet.add(d.expoPushToken);
+      }
+    }
+  }
+  const out = [];
+  const seen = new Set();
+  for (const d of (devices || [])) {
+    const uid = String(d && d.userId);
+    if (uid === 'undefined' || uid === 'null' || !uid) continue;
+    if (uid === String(triggerUserId)) continue;
+    const t = d && d.expoPushToken;
+    if (!t || seen.has(t)) continue;
+    if (excludeTokenSet.has(t)) continue; // this device belongs to triggering user
+    seen.add(t);
+    out.push(uid);
+  }
+  return out;
+}
 
 // Persistent data layer: Firestore when a service-account key is present,
 // automatic in-memory fallback otherwise. See ./storage.js for the schema.

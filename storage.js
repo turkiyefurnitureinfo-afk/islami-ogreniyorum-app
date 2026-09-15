@@ -36,8 +36,11 @@ const KEYS = {
   WELCOME_SHOWN: '@app/welcome_shown',
   QANDA: '@app/qanda',
   COMMUNITY: '@app/community',
-  DELETED_ITEMS: '@app/deleted_items',
   PROFILE_DIRECTORY: '@app/profile_directory',
+  // Community-post registrations that never reached the backend (offline, or
+  // the request timed out while Render cold-started). Retried until they land,
+  // so a post the user can see is never silently local-only.
+  PENDING_POSTS: '@app/pending_post_registrations',
 };
 
 /**
@@ -226,34 +229,41 @@ export async function loadCommunityPosts() {
 }
 
 /**
- * Save deleted item IDs so deletions survive app restarts.
- * @param {Set<string>} deletedIds
+ * Persist community-post registrations that still need to reach the backend.
+ *
+ * A community post is written to AsyncStorage immediately (so the feed shows it
+ * at once), but the matching backend registration can fail: the device is
+ * offline, or Render's free tier is cold-starting and the request blows past the
+ * caller's timeout. Without this queue such a post stays LOCAL-ONLY forever, so
+ * it is visible now and gone after a reinstall.
+ *
+ * @param {Array<object>} list - pending registration entries
  */
-export async function saveDeletedItems(deletedIds) {
+export async function savePendingRegistrations(list) {
   try {
-    await AsyncStorage.setItem(KEYS.DELETED_ITEMS, JSON.stringify([...deletedIds]));
+    await AsyncStorage.setItem(
+      KEYS.PENDING_POSTS,
+      JSON.stringify(Array.isArray(list) ? list : [])
+    );
   } catch (error) {
-    console.error('Failed to save deleted items:', error);
+    console.error('Failed to save pending registrations:', error);
   }
 }
 
 /**
- * Load deleted item IDs.
- * @returns {Promise<Set<string>>}
+ * Load community-post registrations still awaiting the backend.
+ * @returns {Promise<Array<object>>} empty array when nothing is queued
  */
-export async function loadDeletedItems() {
+export async function loadPendingRegistrations() {
   try {
-    const raw = await AsyncStorage.getItem(KEYS.DELETED_ITEMS);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
+    const raw = await AsyncStorage.getItem(KEYS.PENDING_POSTS);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
-    console.error('Failed to load deleted items:', error);
-    return new Set();
+    console.error('Failed to load pending registrations:', error);
+    return [];
   }
 }
-
-/**
- * Clear all app data (used for account deletion).
- */
 export async function clearAllData() {
   try {
     await AsyncStorage.multiRemove([
@@ -262,8 +272,8 @@ export async function clearAllData() {
       KEYS.WELCOME_SHOWN,
       KEYS.QANDA,
       KEYS.COMMUNITY,
-      KEYS.DELETED_ITEMS,
       KEYS.PROFILE_DIRECTORY,
+      KEYS.PENDING_POSTS,
     ]);
   } catch (error) {
     console.error('Failed to clear all data:', error);

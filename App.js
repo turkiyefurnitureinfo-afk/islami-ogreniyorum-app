@@ -19,7 +19,7 @@ import {
 } from './data.js';
 import { translations } from './translations.js';
 import { computeTimes, formatClock, fetchJsonWithRetry, sanitizeTimings } from './utils.js';
-import { sameId, hasRealContent, normalizeServerQA, normalizeServerCommunityPost, mergeQA, mergeCommunityPosts, onlyRealUserPosts, absolutizeMediaRef } from './feedSync.js';
+import { sameId, hasRealContent, normalizeServerQA, normalizeServerCommunityPost, mergeQA, mergeCommunityPosts, onlyRealUserPosts, absolutizeMediaRef, enqueueRegistration, dropRegistration } from './feedSync.js';
 import { getDeviceLocale, localeToLanguage } from './locale.js';
 import { detectLocation, autoDetectLocation } from './locationService.js';
 import { makeStyles } from './styles.js';
@@ -70,13 +70,13 @@ import {
   loadQAndA,
   saveCommunityPosts,
   loadCommunityPosts,
-  saveDeletedItems,
-  loadDeletedItems,
   loadProfileDirectory,
   saveProfileDirectory,
   saveAccountCache,
   loadAccountCache,
   clearAccountCache,
+  savePendingRegistrations,
+  loadPendingRegistrations,
 } from './storage.js';
 import PrayerTab from './PrayerTab.js';
 import QATab from './QATab.js';
@@ -315,19 +315,7 @@ const [profileDirectory, setProfileDirectory] = useState({});
       // Clean up any leftover .temp files from previous sessions
       cleanupTempFiles();
 
-      // Load deleted items so deletions survive app restarts
-      const savedDeletedItems = await loadDeletedItems();
-      if (savedDeletedItems.size > 0) {
-        deletedServerIdsRef.current = savedDeletedItems;
-        // Filter out any deleted items from the loaded data
-        if (savedQAndA) {
-          setQAndA(prev => prev.filter(q => !deletedServerIdsRef.current.has(`qa:${q.serverPostId}`)));
-        }
-        if (savedCommunity) {
-          setCommunityPosts(prev => prev.filter(p => !deletedServerIdsRef.current.has(`post:${p.serverId}`)));
-        }
-      }
-
+      // Deleted items are in-memory only; a fresh install never silently
       // Profile directory: best-known picture/name per email, so feed avatars
       // render immediately (and offline) even before any server refresh.
       const savedDirectory = await loadProfileDirectory();
@@ -1599,7 +1587,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
             const target = qAndA.find(q => sameId(q.id, questionId) && isOwnContent(q.ownerEmail));
             if (target && target.serverPostId) {
               deletedServerIdsRef.current.add(`qa:${target.serverPostId}`);
-              saveDeletedItems(deletedServerIdsRef.current);
               // Permanently remove it from the shared feed so it disappears for
               // everyone (best-effort — local delete still happens below).
               deleteServerQuestion(target.serverPostId, account.email || 'guest').catch(() => {});
@@ -1646,7 +1633,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
     const answer = target?.answers.find(a => sameId(a.id, answerId));
     if (answer && isOwnContent(answer.ownerEmail) && answer.serverContribId) {
       deletedServerIdsRef.current.add(`answer:${answer.serverContribId}`);
-      saveDeletedItems(deletedServerIdsRef.current);
       // Permanently remove the answer from the shared feed (best-effort).
       if (target?.serverPostId) {
         deleteServerAnswer(target.serverPostId, answer.serverContribId, account.email || 'guest').catch(() => {});
@@ -1685,13 +1671,15 @@ const [profileDirectory, setProfileDirectory] = useState({});
           text: t.delete || 'Delete',
           style: 'destructive',
           onPress: () => {
-            // If it's a server-synced post I own, remember it as deleted so a
-            // future feed refresh never resurrects it, AND permanently remove it
-            // from the shared feed for everyone (best-effort).
+            // Only the post owner can delete. The SERVER is authoritative:
+            // deletion is sent first so every other device stops seeing the
+            // post. Locally the post is removed from state immediately, and
+            // the serverId is tombstoned in-memory only (session-scoped, never
+            // persisted), so a reinstall simply re-syncs the remaining feed.
             const target = communityPosts.find(p => sameId(p.id, postId) && isOwnContent(p.ownerEmail));
             if (target && target.serverId) {
+              // In-memory tombstone — survives this session only; NOT persisted.
               deletedServerIdsRef.current.add(`post:${target.serverId}`);
-              saveDeletedItems(deletedServerIdsRef.current);
               deleteServerCommunityPost(target.serverId, account.email || 'guest').catch(() => {});
             }
             setCommunityPosts(prev => prev.filter(p => !(
@@ -1731,7 +1719,6 @@ const [profileDirectory, setProfileDirectory] = useState({});
     const comment = target?.comments.find(c => sameId(c.id, commentId));
     if (comment && isOwnContent(comment.commenterEmail) && comment.id) {
       deletedServerIdsRef.current.add(`comment:${comment.id}`);
-      saveDeletedItems(deletedServerIdsRef.current);
       // Permanently remove the comment from the shared feed (best-effort).
       if (target?.serverId && comment.serverId) {
         deleteServerCommunityComment(target.serverId, comment.serverId, account.email || 'guest').catch(() => {});
@@ -2057,9 +2044,21 @@ const [profileDirectory, setProfileDirectory] = useState({});
       let permanentMedia = null;
       let mediaFailed = false;
       if (media?.uri) {
+        // Force a known type — media.type can be null/undefined on some
+        // clients/pickers, which left every post without a mediaType even when
+        // the upload succeeded (the old normalizer required BOTH and dropped
+        // media on re-sync). The normalizer is now the real guard, but this is
+        // belt-and-suspenders so the server also persists a usable type.
+        const kind = typeof media.type === 'string' && media.type.trim()
+          ? media.type.trim().toLowerCase()
+          : 'image';
+        const ext = typeof media.uri === 'string' && media.uri.includes('.')
+          ? media.uri.split('.').pop().toLowerCase()
+          : kind.includes('video') ? 'mp4' : 'jpg';
+
         try {
           const url = await withTimeout(
-            uploadCommunityMedia(media.uri, media.type),
+            uploadCommunityMedia(media.uri, ext),
             20000,
             null
           );
@@ -2068,7 +2067,16 @@ const [profileDirectory, setProfileDirectory] = useState({});
             url ? url.substring(0, 120) : '(null/empty)'
           );
           if (url) {
-            permanentMedia = { type: media.type, uri: url };
+            // Infer the type when kind is unusable, so the stored post carries
+            // a real type immediately (before any server-side re-type).
+            const inferred =
+              kind === 'image'
+                ? 'image'
+                : kind === 'video'
+                  ? 'video'
+                  : /\.(mp4|webm|mov|m4v|3gp)$/i.test(url) ? 'video'
+                    : 'image';
+            permanentMedia = { type: inferred, uri: url };
           } else {
             throw new Error('timed out');
           }
@@ -2112,7 +2120,9 @@ const [profileDirectory, setProfileDirectory] = useState({});
         timestamp: language === 'tr' ? 'şimdi' : 'just now',
         likes: 0,
         likedByMe: false,
-        media: permanentMedia,
+        media: permanentMedia
+          ? { type: permanentMedia.type, uri: permanentMedia.uri, imgTag: postMediaTag(permanentMedia.uri, permanentMedia.type) }
+          : null,
         comments: [],
       };
       setCommunityPosts(prevPosts => [newPost, ...prevPosts]);

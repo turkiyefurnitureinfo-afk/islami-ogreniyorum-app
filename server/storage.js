@@ -327,17 +327,19 @@ const memImpl = {
   },
   async listQAPosts(limit = 50) {
     const ids = [...memPosts.keys()].slice(-limit).reverse();
-    return ids.map((id) => {
-      const p = memPosts.get(id);
-      const contributions = [...memContribs.entries()]
-        .filter(([k]) => k.startsWith(`${id}:`))
-        .map(([k, c]) => ({ id: k.split(':')[1], ...c }))
-        // Never expose the AI pseudo-user's answers in the public shared feed
-        // — each question's AI answer is private to the asking user only.
-        .filter((c) => c.userId !== 'ai@islamiogreniyorum.app')
-        .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
-      return { id, ...p, contributions };
-    });
+    return ids
+      .map((id) => {
+        const p = memPosts.get(id);
+        const contributions = [...memContribs.entries()]
+          .filter(([k]) => k.startsWith(`${id}:`))
+          .map(([k, c]) => ({ id: k.split(':')[1], ...c }))
+          // Never expose the AI pseudo-user's answers in the public shared feed
+          // — each question's AI answer is private to the asking user only.
+          .filter((c) => c.userId !== 'ai@islamiogreniyorum.app')
+          .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
+        return { id, ...p, contributions };
+      })
+      .filter((p) => !p.deleted);
   },
 
   async registerCommunityPost(postId, ownerUserId, meta = {}) {
@@ -350,6 +352,7 @@ const memImpl = {
       mediaType: meta.mediaType || null,
       mediaUri: meta.mediaUri || null,
       createdAt: meta.createdAt || new Date().toISOString(),
+      deleted: false,
       likedBy: [],
       comments: new Map(),
     });
@@ -393,7 +396,8 @@ const memImpl = {
         createdAt: p.createdAt,
         likedBy: p.likedBy || [],
         comments: [...p.comments.entries()].map(([cid, c]) => ({ id: cid, ...c })),
-      }));
+      }))
+      .filter((p) => !p.deleted);
   },
 
   /** Community feed with live user-profile join.
@@ -473,11 +477,11 @@ const memImpl = {
     if (!p) return false;
     // Only the owner may delete the thread.
     if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
-    // Remove the thread and every contribution under it.
-    memPosts.delete(key);
-    for (const k of [...memContribs.keys()]) {
-      if (k.startsWith(`${key}:`)) memContribs.delete(k);
-    }
+    // Soft-delete in-memory: mark the thread deleted rather than removing it,
+    // so the owner is still knowable and the list filters it out (consistent with
+    // the Firestore soft-delete path). Sub-contributions share the parent flag on
+    // the next feed read — we don't cascade-delete in memory.
+    p.deleted = true;
     saveMemToDisk();
     return true;
   },
@@ -497,7 +501,11 @@ const memImpl = {
     if (!p) return false;
     // Only the owner may delete the post.
     if (ownerUserId && p.ownerUserId && p.ownerUserId !== ownerUserId) return false;
-    memCommunity.delete(key);
+    // Soft-delete in-memory: mark the post deleted rather than removing it, so the
+    // owner is still knowable and the list filters it out (consistent with the
+    // Firestore soft-delete path). Comments stay attached and are hidden via their
+    // parent's deleted flag on the next feed read.
+    p.deleted = true;
     saveMemToDisk();
     return true;
   },
@@ -781,6 +789,8 @@ const fsImpl = {
       .get();
     const out = [];
     for (const doc of snap.docs) {
+      const data = doc.data();
+      if (data && data.deleted) continue; // soft-deleted questions are removed from the shared feed
       const cSnap = await doc.ref.collection(C.QA_CONTRIBUTIONS).get();
       const contributions = cSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
@@ -788,7 +798,7 @@ const fsImpl = {
         // — each question's AI answer is private to the asking user only.
         .filter((c) => c.userId !== 'ai@islamiogreniyorum.app')
         .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
-      out.push({ id: doc.id, ...doc.data(), contributions });
+      out.push({ id: doc.id, ...data, contributions });
     }
     return out;
   },
@@ -800,9 +810,11 @@ const fsImpl = {
       .get();
     const out = [];
     for (const doc of snap.docs) {
+      const data = doc.data();
+      if (data && data.deleted) continue; // soft-deleted posts are removed from the shared feed
       const cSnap = await doc.ref.collection(C.COMMUNITY_COMMENTS).get();
       const comments = cSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      out.push({ id: doc.id, ...doc.data(), comments });
+      out.push({ id: doc.id, ...data, comments });
     }
     return out;
   },
@@ -845,10 +857,12 @@ const fsImpl = {
     if (!snap.exists) return false;
     // Only the owner may delete the thread.
     if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
-    // Remove every contribution sub-document first, then the thread itself.
-    const contribs = await ref.collection(C.QA_CONTRIBUTIONS).get();
-    await Promise.all(contribs.docs.map((doc) => doc.ref.delete()));
-    await ref.delete();
+    // Soft-delete: mark the thread as removed so it disappears from every feed
+    // (including after app reinstalls / server re-deploy) without wiping ownership
+    // history. Sub-contributions stay attached and are hidden via their parent's
+    // deleted flag on the next feed read. Re-deploy-safe: no ref.delete() means no
+    // "missing parent" errors if a client already deleted a child while offline.
+    await ref.update({ deleted: true });
     return true;
   },
   async deleteQAContribution(postId, contributionId, userId) {
@@ -872,10 +886,12 @@ const fsImpl = {
     if (!snap.exists) return false;
     // Only the owner may delete the post.
     if (ownerUserId && snap.data().ownerUserId && snap.data().ownerUserId !== ownerUserId) return false;
-    // Remove every comment sub-document first, then the post itself.
-    const comments = await ref.collection(C.COMMUNITY_COMMENTS).get();
-    await Promise.all(comments.docs.map((doc) => doc.ref.delete()));
-    await ref.delete();
+    // Soft-delete: mark the post as removed so it disappears from every feed
+    // (including after app reinstalls / server re-deploy) while keeping ownership
+    // history intact. Comments stay attached and are hidden via their parent's
+    // deleted flag on the next feed read. Re-deploy-safe: no ref.delete() means
+    // no "missing parent" errors if a client already deleted a child while offline.
+    await ref.update({ deleted: true });
     return true;
   },
   async deleteCommunityComment(postId, commentId, userId) {

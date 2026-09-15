@@ -157,6 +157,37 @@ export function absolutizeMediaRef(raw, apiUrl = '') {
 }
 
 /**
+ * Add (or replace) a pending backend registration in the retry queue.
+ *
+ * Keyed by postId so a post is never queued twice, and capped so a long offline
+ * stretch can't grow AsyncStorage without bound (oldest entries are dropped).
+ *
+ * @param {Array<object>} queue - current queue
+ * @param {object} entry - { postId, userId, name, text, mediaType, mediaUri, avatar }
+ * @param {number} [maxSize=50]
+ * @returns {Array<object>} new queue
+ */
+export function enqueueRegistration(queue, entry, maxSize = 50) {
+  const list = Array.isArray(queue) ? queue : [];
+  if (!entry || entry.postId == null) return list;
+  const key = String(entry.postId);
+  const without = list.filter((e) => String(e && e.postId) !== key);
+  return [...without, entry].slice(-Math.max(1, maxSize));
+}
+
+/**
+ * Remove a post's registration from the retry queue (it reached the backend).
+ * @param {Array<object>} queue
+ * @param {string|number} postId
+ * @returns {Array<object>} new queue
+ */
+export function dropRegistration(queue, postId) {
+  const list = Array.isArray(queue) ? queue : [];
+  const key = String(postId);
+  return list.filter((e) => String(e && e.postId) !== key);
+}
+
+/**
  * Decide whether a stored media reference is an image or a video.
  *
  * `mediaType` is METADATA, never a gate: rows written by older clients (and by
