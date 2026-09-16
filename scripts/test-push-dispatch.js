@@ -34,8 +34,8 @@ T('channelForTrigger new_comment → community',
   channelForTrigger('new_comment', COMMUNITY_CHANNEL_ID) === COMMUNITY_CHANNEL_ID);
 T('channelForTrigger new_answer → community',
   channelForTrigger('new_answer', COMMUNITY_CHANNEL_ID) === COMMUNITY_CHANNEL_ID);
-T('channelForTrigger new_question → default (null)',
-  channelForTrigger('new_question', COMMUNITY_CHANNEL_ID) === null);
+T('channelForTrigger new_question → community', 
+  channelForTrigger('new_question', COMMUNITY_CHANNEL_ID) === COMMUNITY_CHANNEL_ID);
 T('channelForTrigger unknown → default (null)',
   channelForTrigger('upcoming_event', COMMUNITY_CHANNEL_ID) === null);
 

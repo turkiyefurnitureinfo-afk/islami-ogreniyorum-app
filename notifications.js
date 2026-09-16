@@ -477,7 +477,13 @@ export async function setupNotificationChannel() {
       name: 'Topluluk Etkinliği / Community Activity',
       description:
         'Notifications for new community posts, comments, likes, and Q&A activity.',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      // HIGH (was DEFAULT): with DEFAULT importance Android posts the
+      // notification to the shade silently — no heads-up banner, no sound — so
+      // "someone posted a new question" arrived without ever being noticed and
+      // was reported as "notifications not working". HIGH matches what the user
+      // expects from community/Q&A activity; the channel can still be muted
+      // independently from Settings > Notifications.
+      importance: Notifications.AndroidImportance.HIGH,
       sound: 'default',
       vibrationPattern: [0, 200, 100, 200],
       lightColor: '#4a90d9',
@@ -498,6 +504,30 @@ export async function setupNotificationChannel() {
       console.warn('Could not register prayer_alarm category:', error.message);
     }
   }
+}
+
+/**
+ * Is this really an Expo push token?
+ *
+ * Expo's push API only accepts `ExponentPushToken[...]` / `ExpoPushToken[...]`
+ * values. A raw FCM/APNs token (e.g. when the EAS projectId is missing and
+ * getExpoPushTokenAsync silently falls back to FCM) is rejected server-side
+ * with no visible reason, so it must never be stored as this device's token.
+ *
+ * IMPORTANT — this helper used to be MISSING entirely, so the call inside
+ * getExpoPushToken() threw `ReferenceError: isExpoTokenFormat is not defined`.
+ * The surrounding try/catch swallowed it, getExpoPushToken() returned null,
+ * registerDeviceWithBackend() logged "No Expo push token available" and skipped
+ * registration on EVERY launch. The device therefore never appeared in the
+ * server's `devices` collection, so no community/Q&A push notification could
+ * ever reach it — the root cause of "notifications are not working".
+ *
+ * @param {*} token
+ * @returns {boolean}
+ */
+export function isExpoTokenFormat(token) {
+  if (typeof token !== 'string') return false;
+  return /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_\-]+\]$/.test(token.trim());
 }
 
 /**

@@ -34,14 +34,28 @@ function sanitizeText(value, maxLen = 2000) {
 
 /**
  * Map a notification trigger to the Expo channel it should use.
- * Community/Q&A thread activity gets its own channel so the user can mute it
+ * Community/Q&A activity gets its own channel so the user can mute it
  * independently of prayer times; everything else uses the default channel.
+ *
+ * `new_question` is routed to the community channel as well: a brand-new Q&A
+ * question IS community activity, and with channelId = null Android filed it
+ * under the implicit "Default"/"Miscellaneous" channel, where the OS renders
+ * it silently (no heads-up, no sound) and often collapses it — reported as
+ * "question notifications never arrive". The app creates this channel with a
+ * defined importance/sound (notifications.js -> COMMUNITY_CHANNEL_ID), so
+ * routing here is what makes the notification visible.
+ *
  * @param {string} trigger
  * @param {string|null} communityChannelId - the configured community channel id
  * @returns {string|null}
  */
 function channelForTrigger(trigger, communityChannelId) {
-  if (trigger === 'new_post' || trigger === 'new_comment' || trigger === 'new_answer') {
+  if (
+    trigger === 'new_question' ||
+    trigger === 'new_post' ||
+    trigger === 'new_comment' ||
+    trigger === 'new_answer'
+  ) {
     return communityChannelId;
   }
   return null;

@@ -26,9 +26,32 @@ app.use(cors(corsOptions));
 
 // Cap request bodies — the largest legit payload is a community post/comment.
 // Prevents oversized-body abuse on the free-tier deployment.
-// NOTE: /api/upload uses its own 60mb parser (declared below) for base64 media.
-app.use(express.json({ limit: '32kb' }));
-app.use(express.urlencoded({ extended: false, limit: '32kb' }));
+//
+// CRITICAL: /api/upload is SKIPPED here. It carries base64 media (a 10 MB photo
+// is ~13.4 MB of JSON) and has its own 60mb parser declared further below.
+// Because this global parser is registered FIRST it matched POST /api/upload
+// too and aborted every real photo/video with HTTP 413 (PayloadTooLargeError)
+// BEFORE the route's 60mb parser could run — the handler never executed, so
+// every upload failed and community posts were published without their media.
+const smallJsonParser = express.json({ limit: '32kb' });
+const smallUrlencodedParser = express.urlencoded({ extended: false, limit: '32kb' });
+
+// Does this request belong to the upload route (which parses its own body)?
+// A trailing slash is tolerated on purpose: Express matches '/api/upload/' to
+// the route as well, so an exact string compare would hand that variant back to
+// the 32kb parser and reintroduce the 413 it exists to prevent.
+function ownsBodyParsing(req) {
+  return req.path.replace(/\/+$/, '') === '/api/upload';
+}
+
+app.use((req, res, next) => {
+  if (ownsBodyParsing(req)) return next();
+  return smallJsonParser(req, res, next);
+});
+app.use((req, res, next) => {
+  if (ownsBodyParsing(req)) return next();
+  return smallUrlencodedParser(req, res, next);
+});
 
 // Strict per-endpoint AI rate limiting (Task 1): expensive upstreams
 // (Serper + Groq) get their own tight bucket on top of the global limiter.
@@ -612,7 +635,12 @@ app.post('/api/upload', uploadJson, async (req, res) => {
     const url = storedViaStorage
       ? publicUrl   // identical shape — the signed URL GET endpoint below serves it
       : publicUrl;  // disk path is ephemeral but the URL is permanent
-    res.json({ success: true, url, absoluteUrl: `${req.protocol}://${req.get('host')}${url}` });
+    // `url` is already absolute (publicUrl above) — prefixing the host again
+    // produced a malformed "http://hosthttps://host/uploads/…" value.
+    const absoluteUrl = /^https?:\/\//i.test(url)
+      ? url
+      : `${req.protocol}://${req.get('host')}${url}`;
+    res.json({ success: true, url, absoluteUrl });
   } catch (error) {
     console.error('[upload] failed:', error && error.message);
     res.status(400).json({ error: 'Upload failed' });

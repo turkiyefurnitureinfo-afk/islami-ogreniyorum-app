@@ -6,6 +6,7 @@ import {
   Platform,
   Linking,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -548,6 +549,10 @@ const [profileDirectory, setProfileDirectory] = useState({});
   // retry that device would be missing from the registry for the whole
   // session and never receive cross-user notifications.
   const deviceRegRanRef = React.useRef(false);
+  // Flipped to true only once the BACKEND accepted the token. Until then every
+  // foreground re-entry retries, because a device that is missing from the
+  // server's registry receives no community/Q&A push at all.
+  const deviceRegDoneRef = React.useRef(false);
   useEffect(() => {
     if (!hydrated || !signedIn || !account?.email) return;
     if (deviceRegRanRef.current) return;
@@ -560,23 +565,57 @@ const [profileDirectory, setProfileDirectory] = useState({});
     requestNotificationPermissions().catch(() => {});
     ensureExactAlarmPermission().catch(() => {});
 
+    // The backoff schedule deliberately reaches past 60s: the free-tier backend
+    // sleeps after ~15 minutes idle and can need 30-60s just to accept a
+    // request, so the previous schedule (3 attempts, ~3s apart, ~9s total) gave
+    // up while the server was still booting — the device stayed unregistered
+    // and no notification could ever reach it for the rest of the session.
+    const RETRY_DELAYS_MS = [5000, 10000, 20000, 30000, 60000];
+
     const attemptRegistration = (attempt) => {
       registerDeviceWithBackend(account.email, account.email, account.fullName)
         .then((ok) => {
-          // Retry up to 3 times with backoff on failure (network blips at launch).
-          if (!ok && attempt < 3) {
-            setTimeout(() => attemptRegistration(attempt + 1), 3000 * attempt);
-          } else if (!ok) {
-            console.warn('Push device registration failed after retries.');
+          if (ok) {
+            deviceRegDoneRef.current = true;
+            return;
           }
+          const delayMs = RETRY_DELAYS_MS[attempt - 1];
+          if (delayMs == null) {
+            console.warn(
+              'Push device registration failed after all retries — it will be retried when the app returns to the foreground.'
+            );
+            return;
+          }
+          setTimeout(() => attemptRegistration(attempt + 1), delayMs);
         })
         .catch(() => {
-          if (attempt < 3) {
-            setTimeout(() => attemptRegistration(attempt + 1), 3000 * attempt);
-          }
+          const delayMs = RETRY_DELAYS_MS[attempt - 1];
+          if (delayMs != null) setTimeout(() => attemptRegistration(attempt + 1), delayMs);
         });
     };
     attemptRegistration(1);
+  }, [hydrated, signedIn, account?.email, account?.fullName]);
+
+  // Safety net: re-register whenever the app comes back to the foreground until
+  // the backend has confirmed the token. Covers a backend that was asleep, a
+  // rotated push token, or a first launch that had no connectivity.
+  useEffect(() => {
+    if (!hydrated || !signedIn || !account?.email) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || deviceRegDoneRef.current) return;
+      registerDeviceWithBackend(account.email, account.email, account.fullName)
+        .then((ok) => {
+          if (ok) deviceRegDoneRef.current = true;
+        })
+        .catch(() => {});
+    });
+    return () => {
+      try {
+        subscription.remove();
+      } catch {
+        // Listener already gone.
+      }
+    };
   }, [hydrated, signedIn, account?.email, account?.fullName]);
 
   // Schedule or cancel prayer notifications based on settings
@@ -2052,14 +2091,21 @@ const [profileDirectory, setProfileDirectory] = useState({});
         const kind = typeof media.type === 'string' && media.type.trim()
           ? media.type.trim().toLowerCase()
           : 'image';
-        const ext = typeof media.uri === 'string' && media.uri.includes('.')
-          ? media.uri.split('.').pop().toLowerCase()
-          : kind.includes('video') ? 'mp4' : 'jpg';
 
         try {
+          // Pass the media KIND ('image'|'video') — NOT a file extension.
+          // uploadCommunityMedia(uri, type) uses it to choose the byte cap and
+          // the stored MIME/extension; passing the raw extension ('mp4') made
+          // `type === 'video'` false, so videos were treated as images: capped
+          // at 10 MB and stored as .jpg, and any clip bigger than 10 MB failed
+          // outright ("media not showing on posts").
+          //
+          // 60s budget (was 20s): a base64 photo/video is a multi-megabyte body
+          // and the free-tier backend can take 30-60s to cold-start, so the old
+          // 20s timeout aborted the upload and published the post without media.
           const url = await withTimeout(
-            uploadCommunityMedia(media.uri, ext),
-            20000,
+            uploadCommunityMedia(media.uri, kind),
+            60000,
             null
           );
           console.log(
@@ -2120,8 +2166,16 @@ const [profileDirectory, setProfileDirectory] = useState({});
         timestamp: language === 'tr' ? 'şimdi' : 'just now',
         likes: 0,
         likedByMe: false,
+        // NOTE: no `imgTag` field here. It used to call the postMediaTag helper,
+        // which is defined NOWHERE in the codebase, so building this object threw
+        // `ReferenceError: postMediaTag is not defined` for EVERY post that had
+        // media. Everything below it (setCommunityPosts + the backend
+        // registration) consequently never ran: the post never appeared in the
+        // feed, was never registered server-side, and therefore no "New Post"
+        // push was ever broadcast to other users. Media renderers only read
+        // `type` + `uri`.
         media: permanentMedia
-          ? { type: permanentMedia.type, uri: permanentMedia.uri, imgTag: postMediaTag(permanentMedia.uri, permanentMedia.type) }
+          ? { type: permanentMedia.type, uri: permanentMedia.uri }
           : null,
         comments: [],
       };

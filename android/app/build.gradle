@@ -92,8 +92,8 @@ android {
         applicationId 'com.joshua.islamiogreniyorum'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 39
-        versionName "1.0.8"
+        versionCode 41
+        versionName "1.0.10"
     }
     signingConfigs {
         debug {

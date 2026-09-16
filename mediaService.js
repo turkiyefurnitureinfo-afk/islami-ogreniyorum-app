@@ -25,29 +25,80 @@ import { getSecurityHeaders } from './security.js';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 40 * 1024 * 1024;
 
+// Extensions the backend accepts (server/index.js -> IMAGE_EXTS / VIDEO_EXTS).
+const IMAGE_EXT_SET = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
+const VIDEO_EXT_SET = new Set(['mp4', 'mov', 'webm', 'm4v']);
+
+/**
+ * Work out whether the picked file is an image or a video, and which extension
+ * to send to the backend.
+ *
+ * `type` is normally the media KIND ('image' | 'video' | 'video/mp4'), but
+ * callers have historically passed a bare file EXTENSION ('jpg', 'mp4') — that
+ * silently uploaded every video as a 10 MB-capped image, so both forms are
+ * accepted here and anything unrecognised is inferred from the URI.
+ *
+ * @param {string} uri - local file URI (or data URI) of the picked media
+ * @param {string} [type] - media kind or file extension
+ * @returns {{isVideo: boolean, extension: string}}
+ */
+export function resolveMediaKind(uri, type) {
+  const rawType = typeof type === 'string' ? type.trim().toLowerCase() : '';
+  const uriExtRaw = typeof uri === 'string'
+    ? (uri.split('?')[0].split('#')[0].split('.').pop() || '').toLowerCase()
+    : '';
+  const uriExt = /^[a-z0-9]{2,5}$/.test(uriExtRaw) ? uriExtRaw : '';
+
+  let isVideo;
+  if (rawType === 'video' || rawType.startsWith('video/')) {
+    isVideo = true;
+  } else if (rawType === 'image' || rawType.startsWith('image/')) {
+    isVideo = false;
+  } else if (VIDEO_EXT_SET.has(rawType)) {
+    isVideo = true; // an extension such as 'mp4' was passed instead of the kind
+  } else if (IMAGE_EXT_SET.has(rawType)) {
+    isVideo = false; // an extension such as 'jpg' was passed instead of the kind
+  } else {
+    // Unknown/empty kind → sniff the URI extension (defaults to image).
+    isVideo = VIDEO_EXT_SET.has(uriExt);
+  }
+
+  const allowed = isVideo ? VIDEO_EXT_SET : IMAGE_EXT_SET;
+  const extension = allowed.has(uriExt)
+    ? uriExt
+    : allowed.has(rawType)
+      ? rawType
+      : isVideo ? 'mp4' : 'jpg';
+
+  return { isVideo, extension };
+}
+
 /**
  * Upload a picked image/video to the backend, which stores it and returns a
  * permanent public URL.
  *
  * @param {string} uri - local file URI (file://…) or data URI
- * @param {'image'|'video'} type - media kind (picks extension + MIME type)
+ * @param {'image'|'video'|string} type - media kind (also tolerates a file
+ *   extension for backward compatibility — see resolveMediaKind)
  * @returns {Promise<string>} permanent public URL for the file
  * @throws {Error} when the upload fails (network / server error).
  */
 export async function uploadCommunityMedia(uri, type) {
   if (!uri) throw new Error('No media URI provided');
-  const isVideo = type === 'video';
-  const extension = isVideo ? 'mp4' : 'jpg';
+  const { isVideo, extension } = resolveMediaKind(uri, type);
+  const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
 
   console.log(
     '[upload] starting upload — uri=',
     uri.substring(0, 80),
     '| type=',
     type,
+    '| isVideo=',
+    isVideo,
     '| ext=',
     extension
   );
-  const dataUri = await fileToDataUri(uri, isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES);
+  const dataUri = await fileToDataUri(uri, maxBytes);
   const uploadStart = Date.now();
   let httpStatus = null;
   let returnedUrl = null;
