@@ -740,6 +740,26 @@ app.get('/api/diagnostics', async (req, res) => {
   }
 });
 
+// DEBUG: inspect token formats stored for registered devices
+app.get('/api/dev/debug-tokens', async (req, res) => {
+  try {
+    const devices = await storage.getAllDevices().catch(() => []);
+    const valid = devices.filter((d) => /^ExponentPushToken\[/.test(d.expoPushToken || ''));
+    const invalid = devices.filter((d) => !/^ExponentPushToken\[/.test(d.expoPushToken || ''));
+    res.json({
+      total: devices.length,
+      validExpoTokens: valid.length,
+      invalidTokens: invalid.length,
+      sampleInvalidToken:
+        invalid.length > 0 ? String(invalid[0].expoPushToken || '').slice(0, 80) : null,
+      sampleValidToken:
+        valid.length > 0 ? String(valid[0].expoPushToken || '').slice(0, 80) : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 // Register a device token for a user
 app.post('/api/register', requireVerifiedUser, async (req, res) => {
   const userId = req.verifiedUserId;
