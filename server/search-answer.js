@@ -66,7 +66,7 @@ async function fetchJson(url, opts = {}) {
 // --- 1. Serper.dev (Google search results, key-only) -------------------------
 async function searchSerperResults(query, language) {
   try {
-    const { searchSerper } = await import('./services/serperService.js');
+    const { searchSerper } = require('./services/serperService');
     const items = await searchSerper(query, language);
     if (!items || items.length === 0) return null;
     return items.map((it) => ({

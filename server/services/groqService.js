@@ -33,7 +33,7 @@ const TIMEOUT_MS = Number(process.env.GROQ_TIMEOUT_MS || 15000);
  * @param {Array<{role: string, content: string}>} messages
  * @returns {Promise<string>}
  */
-export async function getGroqChatCompletion(messages) {
+async function getGroqChatCompletion(messages) {
   if (!GROQ_API_KEY) {
     throw new Error('[GroqService] Missing GROQ_API_KEY environment variable.');
   }
@@ -119,3 +119,5 @@ export async function getGroqChatCompletion(messages) {
     throw new Error(`[GroqService] Failed to get Groq completion: ${message}`);
   }
 }
+
+module.exports = { getGroqChatCompletion };

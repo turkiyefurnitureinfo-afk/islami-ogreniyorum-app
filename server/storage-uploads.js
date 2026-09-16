@@ -191,6 +191,17 @@ function getBucket() {
 }
 
 /**
+ * Resolved bucket name for diagnostics (null when Storage is unusable).
+ * Lets /api/diagnostics report whether media truly persists across deploys
+ * (Firebase Storage) or only lives on the host's ephemeral disk.
+ * @returns {Promise<string|null>}
+ */
+async function getBucketName() {
+  const bucket = await getBucket();
+  return bucket ? bucket.name : null;
+}
+
+/**
  * Upload a buffer to Firebase Storage. Objects are kept PRIVATE; reads go
  * through short-lived V4 signed URLs (see getSignedUrl) served by the API's
  * /uploads/:name route. This avoids needing public-read IAM on the bucket and
@@ -299,7 +310,7 @@ async function deleteObject(name) {
   }
 }
 
-module.exports = { uploadBuffer, getSignedUrl, getObjectStream, deleteObject };
+module.exports = { uploadBuffer, getSignedUrl, getObjectStream, deleteObject, getBucketName };
 
 
 

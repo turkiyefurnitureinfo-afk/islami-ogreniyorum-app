@@ -62,7 +62,7 @@ function consumeQuota() {
  * @returns {Promise<Array<{title:string,snippet:string,link:string}>>}
  *   Up to 5 results, or [] when quota is exhausted / API unconfigured / no results.
  */
-export async function searchSerper(query, language = 'en') {
+async function searchSerper(query, language = 'en') {
   try {
     const q = String(query || '').trim().slice(0, 500);
     if (!q) return [];
@@ -88,10 +88,9 @@ export async function searchSerper(query, language = 'en') {
     let controller;
     let timer = null;
     try {
-      try {
-        controller = new AbortController();
-        timer = setTimeout(() => { try { controller.abort(); } catch {} }, SEARCH_TIMEOUT_MS);
-      } catch { controller = undefined; }
+      controller = new AbortController();
+      timer = setTimeout(() => { try { controller.abort(); } catch {} }, SEARCH_TIMEOUT_MS);
+    } catch { controller = undefined; }
       const res = await fetch(SERPER_BASE_URL + '/search', {
         method: 'POST',
         headers: {
@@ -134,7 +133,7 @@ export async function searchSerper(query, language = 'en') {
  * Serper monthly usage status (for monitoring / logging).
  * @returns {{ used:number, limit:number, remaining:number, exhausted:boolean, month:string }}
  */
-export function getQuotaStatus() {
+function getQuotaStatus() {
   return {
     used: _state.count,
     limit: MONTHLY_LIMIT,
@@ -143,3 +142,5 @@ export function getQuotaStatus() {
     month: _state.month || getMonth(),
   };
 }
+
+module.exports = { searchSerper, getQuotaStatus };

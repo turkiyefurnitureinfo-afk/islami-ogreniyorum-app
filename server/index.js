@@ -483,8 +483,15 @@ const UPLOADS_DIR =
   process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads');
 const crypto = require('crypto');
 const fs = require('fs');
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB, mirrors app limit
-const MAX_UPLOAD_BASE64 = Math.ceil(MAX_UPLOAD_BYTES * 1.34) + 1024;
+// Per-type upload caps (product requirement): images <= 10 MB, videos <= 40 MB
+// (~60 s of typical phone video). 40 MB stays under the 60 MB JSON body limit
+// even after base64 inflation (~x1.34 => ~54 MB). The 60 s duration cap is
+// enforced client-side at pick time (CommunityTab) — a server cannot parse
+// duration from raw bytes cheaply.
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const VIDEO_MAX_BYTES = 40 * 1024 * 1024; // 40 MB
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'm4v']);
 
 // Ensure the uploads dir exists (both locally and on Render's ephemeral disk).
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -529,11 +536,26 @@ app.post('/api/upload', uploadJson, async (req, res) => {
   if (!data || typeof data !== 'string') {
     return res.status(400).json({ error: 'data (base64) is required' });
   }
-  if (typeof data !== 'string' || data.length > MAX_UPLOAD_BASE64) {
-    return res.status(413).json({ error: 'Upload too large (max 50 MB)' });
+  const safeExt = /^[A-Za-z0-9]{1,6}$/.test(String(ext)) ? String(ext).toLowerCase() : 'bin';
+  const isVideo = VIDEO_EXTS.has(safeExt);
+  const isImage = IMAGE_EXTS.has(safeExt);
+  if (!isVideo && !isImage) {
+    return res.status(400).json({
+      error:
+        'Unsupported file type "' +
+        safeExt +
+        '" (allowed — images: jpg/jpeg/png/webp/gif, videos: mp4/mov/webm/m4v)',
+    });
   }
-  const safeExt =
-    /^[A-Za-z0-9]{1,6}$/.test(String(ext)) ? String(ext) : 'bin';
+  const maxBytes = isVideo ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES;
+  const maxBase64 = Math.ceil(maxBytes * 1.34) + 1024;
+  if (data.length > maxBase64) {
+    return res.status(413).json({
+      error: isVideo
+        ? 'Video too large (max 40 MB — please keep clips under 60 seconds)'
+        : 'Image too large (max 10 MB)',
+    });
+  }
 
   try {
     // The client sends a full data URI ("data:image/jpeg;base64,....") from
@@ -546,8 +568,12 @@ app.post('/api/upload', uploadJson, async (req, res) => {
 
     const buf = Buffer.from(b64, 'base64');
     if (buf.length < 1) throw new Error('Empty data');
-    if (buf.length > MAX_UPLOAD_BYTES) {
-      return res.status(413).json({ error: 'Upload too large (max 50 MB)' });
+    if (buf.length > maxBytes) {
+      return res.status(413).json({
+        error: isVideo
+          ? 'Video too large (max 40 MB — please keep clips under 60 seconds)'
+          : 'Image too large (max 10 MB)',
+      });
     }
     const name = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${safeExt}`;
 
@@ -642,6 +668,64 @@ app.get('/uploads/:name', async (req, res) => {
       return object.stream.pipe(res);
     }
 
+// ---------- Diagnostics (ops visibility) ----------
+// One GET that answers, without digging through logs:
+//   • Is Firestore active or are we on the in-memory fallback?
+//   • How many devices can currently receive a push notification?
+//   • Is EXPO_ACCESS_TOKEN configured (push security will 401 without it)?
+//   • Does media persist across deploys (Firebase Storage) or only live on
+//     the host's ephemeral disk?
+//   • Which upload limits are active?
+// Usage: open https://<host>/api/diagnostics in a browser or curl it.
+app.get('/api/diagnostics', async (req, res) => {
+  try {
+    const devices = await storage.getAllDevices().catch(() => []);
+    let bucketName = null;
+    try {
+      bucketName = await storageUploads.getBucketName();
+    } catch (_e) {
+      bucketName = null;
+    }
+    let uploadsOnDisk = 0;
+    try {
+      uploadsOnDisk = fs
+        .readdirSync(UPLOADS_DIR)
+        .filter((f) => !f.startsWith('.')).length;
+    } catch (_e) {
+      // Uploads dir unreadable — report 0 rather than failing the endpoint.
+    }
+    const token = process.env.EXPO_ACCESS_TOKEN || '';
+    res.json({
+      success: true,
+      time: new Date().toISOString(),
+      storage: {
+        mode: storage.isFirestoreEnabled() ? 'firestore' : 'memory',
+        registeredDevices: Array.isArray(devices) ? devices.length : 0,
+      },
+      push: {
+        expoAccessTokenConfigured: !!token && !/PLACEHOLDER/i.test(token),
+        communityChannelId: COMMUNITY_CHANNEL_ID,
+        note:
+          'Recipients EXCLUDE the triggering user — test pushes with a SECOND registered device/account.',
+      },
+      media: {
+        firebaseStorageBucket: bucketName,
+        mediaPersistsAcrossDeploys: !!bucketName,
+        filesOnEphemeralDisk: uploadsOnDisk,
+        limits: {
+          imageMaxBytes: IMAGE_MAX_BYTES,
+          videoMaxBytes: VIDEO_MAX_BYTES,
+          videoMaxSeconds: 60,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[diagnostics] failed:', error?.message || error);
+    res.status(500).json({ success: false, error: 'diagnostics failed' });
+  }
+});
+
+// Register a device token for a user
     // 3) Last resort for clients/hosts where streaming is not possible.
     const signed = await storageUploads.getSignedUrl(name);
     if (signed) {
@@ -1380,7 +1464,7 @@ app.post('/api/ai/chat', async (req, res) => {
   const safeQuestion = question.trim().slice(0, 1000);
 
   try {
-    const { handleSearchAugmentedChat } = await import('./services/chatPipeline.js');
+    const { handleSearchAugmentedChat } = require('./services/chatPipeline');
     const result = await Promise.race([
       handleSearchAugmentedChat(safeQuestion, language === 'en' ? 'en' : 'tr'),
       new Promise((resolve) => setTimeout(() => resolve(null), AI_ANSWER_CEILING_MS)),

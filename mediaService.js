@@ -19,8 +19,11 @@
 import { API_URL } from './config.js';
 import { getSecurityHeaders } from './security.js';
 
-// Matches the 50 MB limit enforced by the server upload endpoint.
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+// Matches the server upload endpoint's per-type caps (see server/index.js):
+// images <= 10 MB, videos <= 40 MB (≈60 s clip). Checking here avoids
+// uploading a payload the server is guaranteed to reject with 413.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 40 * 1024 * 1024;
 
 /**
  * Upload a picked image/video to the backend, which stores it and returns a
@@ -44,7 +47,7 @@ export async function uploadCommunityMedia(uri, type) {
     '| ext=',
     extension
   );
-  const dataUri = await fileToDataUri(uri);
+  const dataUri = await fileToDataUri(uri, isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES);
   const uploadStart = Date.now();
   let httpStatus = null;
   let returnedUrl = null;
@@ -104,7 +107,7 @@ export async function uploadProfileImage(uri) {
     return uri;
   }
 
-  const dataUri = await fileToDataUri(uri);
+  const dataUri = await fileToDataUri(uri, MAX_IMAGE_BYTES);
   const { url } = await fetch(`${API_URL}/api/upload`, {
     method: 'POST',
     headers: {
@@ -144,14 +147,15 @@ export function validateMediaUrl(url) {
  * @param {string} uri
  * @returns {Promise<string>}
  */
-async function fileToDataUri(uri) {
+async function fileToDataUri(uri, maxBytes = MAX_IMAGE_BYTES) {
   if (/^data:/i.test(uri)) return uri;
   // React Native's fetch can read local file:// URIs.
   const response = await fetch(uri);
   const blob = await response.blob();
-  if (blob && blob.size > MAX_MEDIA_BYTES) {
+  if (blob && blob.size > maxBytes) {
+    const limitMb = Math.round(maxBytes / (1024 * 1024));
     throw new Error(
-      `Media is ${(blob.size / (1024 * 1024)).toFixed(1)} MB — the limit is 50 MB.`
+      `Media is ${(blob.size / (1024 * 1024)).toFixed(1)} MB — the limit is ${limitMb} MB.`
     );
   }
   // RN Blob has no.arrayBuffer() in some versions; use a FileReader instead.

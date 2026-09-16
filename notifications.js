@@ -506,6 +506,28 @@ export async function setupNotificationChannel() {
  */
 export async function getExpoPushToken() {
   try {
+    // Android 13+ (API 33) requires POST_NOTIFICATIONS to be GRANTED before
+    // getExpoPushTokenAsync can return a token. Requesting it HERE (awaited,
+    // inside registration) removes the launch-time race where device
+    // registration ran while the permission dialog was still open — the token
+    // call failed silently, the device never landed in the server's `devices`
+    // collection, and community/Q&A pushes could never arrive. This was the
+    // #1 "notifications not working" cause on Android 13+.
+    try {
+      const granted = await requestNotificationPermissions();
+      if (!granted) {
+        console.warn(
+          '[push-token] notification permission not granted — cannot obtain a push token.'
+        );
+        return null;
+      }
+    } catch (permError) {
+      console.warn(
+        '[push-token] permission check failed (continuing):',
+        permError?.message || permError
+      );
+      // Non-fatal: on iOS / older Android the token may still be obtainable.
+    }
     // Diagnostics: log what Constants actually exposes at runtime
     // (SDK 53 path). This tells us whether the eas.projectId survives the
     // APK build's manifest generation.

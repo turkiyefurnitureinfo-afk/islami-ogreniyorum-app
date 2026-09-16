@@ -17,8 +17,8 @@
 //   - search results present -> plain-text snippet summary (provider serper)
 //   - search unavailable     -> "no relevant sources found" (provider none)
 // ---------------------------------------------------------------------------
-import { searchSerper, getQuotaStatus } from './serperService.js';
-import { getGroqChatCompletion } from './groqService.js';
+const { searchSerper, getQuotaStatus } = require('./serperService');
+const { getGroqChatCompletion } = require('./groqService');
 
 // --- Config ------------------------------------------------------------------
 
@@ -124,7 +124,7 @@ const SYSTEM_PROMPTS = {
  * @param {'tr'|'en'} language
  * @returns {Promise<{reply: string, sources: Array<{title:string,url:string}>, provider: string}>}
  */
-export async function handleSearchAugmentedChat(userQuery, language = 'en') {
+async function handleSearchAugmentedChat(userQuery, language = 'en') {
   // Stage 1: Search
   const searchResults = await searchSerper(userQuery, language);
   const context = formatSearchContext(searchResults, language);
@@ -191,5 +191,5 @@ export async function handleSearchAugmentedChat(userQuery, language = 'en') {
   return { reply, sources, provider };
 }
 
-/** Expose quota status for monitoring. */
-export { getQuotaStatus };
+// Expose the pipeline + quota status for the API layer and monitoring.
+module.exports = { handleSearchAugmentedChat, getQuotaStatus };

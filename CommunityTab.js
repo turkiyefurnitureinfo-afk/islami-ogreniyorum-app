@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator, RefreshControl } from 'react-native';
+import { ScrollView, View, Text, TextInput, Pressable, Image, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { TranslateButton } from './useTranslate.js';
@@ -262,7 +262,18 @@ const CommunityTab = ({
         quality: 0.8,
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setMedia({ type: 'image', uri: result.assets[0].uri });
+        const asset = result.assets[0];
+        // Product limit: images must be < 10 MB. The picker reports fileSize
+        // on most platforms; mediaService enforces the same cap on the blob
+        // as a guaranteed backstop before anything is uploaded.
+        if (asset?.fileSize && asset.fileSize > 10 * 1024 * 1024) {
+          Alert.alert(
+            t?.imageTooLargeTitle || 'Image too large',
+            t?.imageTooLargeMsg || 'Please choose an image smaller than 10 MB.'
+          );
+          return;
+        }
+        setMedia({ type: 'image', uri: asset.uri });
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -280,7 +291,21 @@ const CommunityTab = ({
         quality: 0.8,
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setMedia({ type: 'video', uri: result.assets[0].uri });
+        const asset = result.assets[0];
+        // Product limit: videos must be < 60 seconds. expo-image-picker
+        // reports `duration` in seconds on some platforms and milliseconds on
+        // others — normalise (values > 1000 are treated as milliseconds).
+        const raw = asset?.duration;
+        const seconds =
+          typeof raw === 'number' && raw > 0 ? (raw > 1000 ? raw / 1000 : raw) : null;
+        if (seconds && seconds > 60) {
+          Alert.alert(
+            t?.videoTooLongTitle || 'Video too long',
+            t?.videoTooLongMsg || 'Please choose a video shorter than 60 seconds.'
+          );
+          return;
+        }
+        setMedia({ type: 'video', uri: asset.uri });
       }
     } catch (error) {
       console.error('Error picking video:', error);
