@@ -304,6 +304,31 @@ const mergedWithLocalAppend = feedSync.mergeCommunityPosts([localNew, older, new
 const localFirst = mergedWithLocalAppend[0].id === localNew.id;
 T('local-only newest post sorts to top (id fallback)', localFirst);
 
+// --- Deletion propagation: posts removed by OTHER users must vanish from
+// local state when the server no longer returns them (no user-level tombstone).
+// Before the fix, mergeCommunityPosts kept every "no match" local post as if
+// it were an unsynced draft — so deleted-by-others posts never disappeared.
+const prevOwnPost = feedSync.normalizeServerCommunityPost({ id: 1, ownerUserId: 'me@x', text: 'mine', createdAt: '2024-01-01T00:00:00.000Z' }, 'tr');
+const prevOtherPost = feedSync.normalizeServerCommunityPost({ id: 2, ownerUserId: 'other@x', text: 'theirs', createdAt: '2024-01-02T00:00:00.000Z' }, 'tr');
+// 'other' post is gone from the server (deleted by its owner) — simulate by
+// only returning prevOwnPost on the next feed poll.
+const deletedMerged = feedSync.mergeCommunityPosts([prevOwnPost, prevOtherPost], [prevOwnPost], new Set());
+T('mergeCommunityPosts drops posts deleted by other users',
+  deletedMerged.length === 1 && deletedMerged[0].id === prevOwnPost.id);
+
+// The user's own unsynced draft (no serverId) must NOT be dropped when the
+// server doesn't return it.
+const unsyncedDraft = { id: 999, serverId: undefined, ownerEmail: 'me@x', text: 'draft', comments: [] };
+const keptDraft = feedSync.mergeCommunityPosts([unsyncedDraft, prevOwnPost], [prevOwnPost], new Set());
+T('mergeCommunityPosts keeps local-only draft (no serverId)', keptDraft.some((p) => p.id === 999));
+
+// A post with serverId that IS in the server response must survive even if
+// its local numeric id doesn't match by string conversion quirks.
+const serverPost = feedSync.normalizeServerCommunityPost({ id: 'abc123', ownerUserId: 'me@x', text: 'kept' }, 'tr');
+const localCopy = { id: 'abc123', serverId: 'abc123', ownerEmail: 'me@x', text: 'old text', user: { name: 'Me', avatar: '👤', avatarUrl: 'https://x/a.jpg' }, comments: [] };
+const freshServer = [serverPost];
+const survived = feedSync.mergeCommunityPosts([localCopy], freshServer, new Set());
+T('mergeCommunityPosts keeps post present on server', survived.length === 1 && survived[0].id === 'abc123');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

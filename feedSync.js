@@ -394,6 +394,11 @@ export function mergeCommunityPosts(prev, serverP, deletedIds) {
   // Exclude posts the current user deleted (tombstone).
   const filteredP = serverP.filter((p) => !deletedIds.has('post:' + String(p.serverId)));
   const byRawId = new Map(filteredP.map((p) => [String(p.id), p]));
+  // Index server posts by their serverId too, so we can tell whether a
+  // previously-synced post is still present on the server. A local post that
+  // HAS a serverId but is ABSENT from the server was deleted by its owner —
+  // the server is authoritative and must win over local state.
+  const serverByServerId = new Set(filteredP.map((p) => String(p.serverId)).filter((s) => s));
 
   const out = [];
   const consumed = new Set();
@@ -445,7 +450,18 @@ export function mergeCommunityPosts(prev, serverP, deletedIds) {
             return c;
           }),
       });
+    } else if (post.serverId && serverByServerId.has(String(post.serverId))) {
+      // No ID match but the server DOES have a post with this serverId —
+      // this is a legitimate local post (e.g. an unsynced draft) that the
+      // server has since created. Keep it.
+      out.push(post);
+    } else if (post.serverId && !serverByServerId.has(String(post.serverId))) {
+      // The server no longer has this post — it was deleted by its owner.
+      // The server is authoritative: drop it so it disappears from every
+      // device's feed on the next sync, including posts created by OTHER users.
+      continue;
     } else {
+      // No serverId: genuinely local-only draft (never synced). Keep it.
       out.push(post);
     }
   }
