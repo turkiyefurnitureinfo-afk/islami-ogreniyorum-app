@@ -668,6 +668,21 @@ app.get('/uploads/:name', async (req, res) => {
       return object.stream.pipe(res);
     }
 
+    // 3) Last resort for clients/hosts where streaming is not possible.
+    const signed = await storageUploads.getSignedUrl(name);
+    if (signed) {
+      console.log(`[uploads] redirected ${name} to a signed URL`);
+      return res.redirect(302, signed);
+    }
+
+    console.warn(`[uploads] ${name} NOT FOUND in Storage or on disk`);
+    return res.status(404).json({ error: 'Not found' });
+  } catch (error) {
+    console.error('[uploads] serve error:', error && error.message);
+    return res.status(404).json({ error: 'Not found' });
+  }
+});
+
 // ---------- Diagnostics (ops visibility) ----------
 // One GET that answers, without digging through logs:
 //   • Is Firestore active or are we on the in-memory fallback?
@@ -722,22 +737,6 @@ app.get('/api/diagnostics', async (req, res) => {
   } catch (error) {
     console.error('[diagnostics] failed:', error?.message || error);
     res.status(500).json({ success: false, error: 'diagnostics failed' });
-  }
-});
-
-// Register a device token for a user
-    // 3) Last resort for clients/hosts where streaming is not possible.
-    const signed = await storageUploads.getSignedUrl(name);
-    if (signed) {
-      console.log(`[uploads] redirected ${name} to a signed URL`);
-      return res.redirect(302, signed);
-    }
-
-    console.warn(`[uploads] ${name} NOT FOUND in Storage or on disk`);
-    return res.status(404).json({ error: 'Not found' });
-  } catch (error) {
-    console.error('[uploads] serve error:', error && error.message);
-    return res.status(404).json({ error: 'Not found' });
   }
 });
 
